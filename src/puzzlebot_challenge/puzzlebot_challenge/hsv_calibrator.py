@@ -8,6 +8,8 @@ Usage: python3 hsv_calibrator.py [--docs DIR] [--out FILE]
 Controls: r/g/y (color), 1/2 (range), n/p (image), s (save), q (quit)
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
