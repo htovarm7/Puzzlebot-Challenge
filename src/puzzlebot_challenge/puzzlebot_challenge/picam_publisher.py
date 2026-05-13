@@ -26,9 +26,9 @@ class PiCamPublisher(Node):
     def __init__(self):
         super().__init__('picam_publisher')
 
-        self.declare_parameter('sensor_mode', 4)
-        self.declare_parameter('src_width', 1280)
-        self.declare_parameter('src_height', 720)
+        self.declare_parameter('sensor_mode', 3)
+        self.declare_parameter('src_width', 1640)
+        self.declare_parameter('src_height', 1232)
         self.declare_parameter('src_fps', 30)
         self.declare_parameter('out_width', 320)
         self.declare_parameter('out_height', 240)
