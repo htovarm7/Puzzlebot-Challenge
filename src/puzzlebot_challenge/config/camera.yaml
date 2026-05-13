@@ -1,0 +1,18 @@
+picam_publisher:
+  ros__parameters:
+    sensor_mode: 4
+    src_width: 1280
+    src_height: 720
+    src_fps: 30
+    out_width: 320
+    out_height: 240
+    pub_fps: 30.0
+    topic: /camera/image_raw
+    frame_id: picam
+
+cam_server:
+  ros__parameters:
+    topic: /camera/image_raw
+    host: 0.0.0.0
+    port: 8080
+    jpeg_quality: 75
