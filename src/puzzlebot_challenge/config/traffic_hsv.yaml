@@ -1,7 +1,7 @@
 red:
   range1:
     h_min: 0
-    h_max: 44
+    h_max: 10
     s_min: 80
     s_max: 255
     v_min: 31
@@ -15,9 +15,9 @@ red:
     v_max: 255
 yellow:
   range1:
-    h_min: 18
-    h_max: 32
-    s_min: 80
+    h_min: 15
+    h_max: 38
+    s_min: 60
     s_max: 255
     v_min: 80
     v_max: 255

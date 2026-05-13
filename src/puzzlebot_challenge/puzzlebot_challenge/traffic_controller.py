@@ -178,13 +178,6 @@ class TrafficLightNode(Node):
 
         detected, counts = self.detector.detect_state(frame)
 
-        # Raw pixel counts every frame
-        self.get_logger().info(
-            f"R={counts.get('red',0):5d} "
-            f"Y={counts.get('yellow',0):5d} "
-            f"G={counts.get('green',0):5d} → {detected.upper()}"
-        )
-
         # Hysteresis
         if detected == self._candidate:
             self._candidate_count += 1
@@ -195,8 +188,7 @@ class TrafficLightNode(Node):
         if self._candidate_count >= stable_frames and self._candidate != self._current_state:
             self._current_state = self._candidate
             self._publish_now()
-            label = self._current_state.upper()
-            self.get_logger().info(f"*** {label} ***")
+            self.get_logger().info(f"STATE: {self._current_state.upper()}")
 
         # Debug image → /vision/traffic
         self._publish_debug(frame, detected, counts)
