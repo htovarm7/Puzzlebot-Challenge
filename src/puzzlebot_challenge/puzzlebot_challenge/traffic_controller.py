@@ -18,6 +18,8 @@ hardcodeados. Usa `ros2 run puzzlebot_challenge hsv_calibrator` para generar
 o ajustar ese YAML.
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
