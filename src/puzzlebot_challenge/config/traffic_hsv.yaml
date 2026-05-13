@@ -1,13 +1,10 @@
-# Rangos HSV para detección de semáforo.
-# Generado / editado con: ros2 run puzzlebot_challenge hsv_calibrator
-
 red:
   range1:
     h_min: 0
-    h_max: 8
+    h_max: 44
     s_min: 80
     s_max: 255
-    v_min: 80
+    v_min: 31
     v_max: 255
   range2:
     h_min: 172
@@ -16,7 +13,6 @@ red:
     s_max: 255
     v_min: 80
     v_max: 255
-
 yellow:
   range1:
     h_min: 18
@@ -25,7 +21,6 @@ yellow:
     s_max: 255
     v_min: 80
     v_max: 255
-
 green:
   range1:
     h_min: 45
