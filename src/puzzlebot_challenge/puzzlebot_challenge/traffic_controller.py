@@ -136,7 +136,7 @@ class TrafficLightNode(Node):
 
         if self._candidate_count >= stable_frames and self._candidate != self._current_state:
             self.get_logger().info(
-                f"🚦 Estado: {self._current_state} → {self._candidate}"
+                f"Estado: {self._current_state} → {self._candidate}"
             )
             self._current_state = self._candidate
             self._publish_now()
