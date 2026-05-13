@@ -77,7 +77,7 @@ def _load_hsv_yaml(path: str) -> dict | None:
 class TrafficLightDetection:
     """Testeable independientemente de ROS con cualquier imagen BGR."""
 
-    def __init__(self, min_area: int = 200, min_circularity: float = 0.55,
+    def __init__(self, min_area: int = 200, min_circularity: float = 0.60,
                  roi_fraction: float = 1.0, hsv_ranges: dict | None = None):
         self.min_area        = min_area
         self.min_circularity = min_circularity
@@ -159,7 +159,7 @@ class TrafficLightNode(Node):
             "min_area", 200,
             ParameterDescriptor(description="Área mínima (px²) del blob circular"))
         self.declare_parameter(
-            "min_circularity", 0.55,
+            "min_circularity", 0.60,
             ParameterDescriptor(description="Circularidad mínima 0-1 (1=círculo perfecto)"))
         self.declare_parameter(
             "stable_frames", 3,
@@ -225,6 +225,13 @@ class TrafficLightNode(Node):
 
         detected, scores = self.detector.detect_state(frame)
 
+        # Log every frame
+        s = scores.get(detected, {})
+        self.get_logger().info(
+            f"[{detected.upper():6s}] circ={s.get('circularity', 0):.2f} "
+            f"area={s.get('area', 0):.0f} | confirmed={self._current_state.upper()}"
+        )
+
         # Hysteresis
         if detected == self._candidate:
             self._candidate_count += 1
@@ -235,19 +242,11 @@ class TrafficLightNode(Node):
         if self._candidate_count >= stable_frames and self._candidate != self._current_state:
             self._current_state = self._candidate
             self._publish_now()
-            if detected != "none":
-                s = scores.get(detected, {})
-                self.get_logger().info(
-                    f"STATE: {self._current_state.upper()} | "
-                    f"circ={s.get('circularity', 0):.2f} area={s.get('area', 0):.0f}"
-                )
-            else:
-                self.get_logger().info("STATE: NONE")
+            self.get_logger().info(f"*** STATE → {self._current_state.upper()} ***")
 
         # Debug image → /vision/traffic
         self._publish_debug(frame, detected, scores)
 
-    # ── Imagen de debug ───────────────────────────────────────────────────────
     _OVERLAY_BGR = {
         "red":    (0,   0,   220),
         "yellow": (0,   210, 210),
@@ -275,7 +274,6 @@ class TrafficLightNode(Node):
             is_det = (color == detected)
 
             if is_det and center:
-                # Solid overlay on detected color pixels
                 fill = np.full_like(frame, self._OVERLAY_BGR[color])
                 vis[mask > 0] = cv2.addWeighted(frame, 0.3, fill, 0.7, 0)[mask > 0]
 
@@ -287,13 +285,11 @@ class TrafficLightNode(Node):
                 cv2.putText(vis, f"{circ:.2f}", (center[0] + radius + 2, center[1]),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, border_clr, 1)
 
-        # Banner at top
         banner_color = self._OVERLAY_BGR.get(detected, (80, 80, 80))
         cv2.rectangle(vis, (0, 0), (vis.shape[1], 28), banner_color, -1)
         cv2.putText(vis, detected.upper(), (6, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # Circularity scores at bottom
         parts = [
             f"{c[0].upper()}:circ={scores.get(c,{}).get('circularity',0):.2f}"
             for c in ("red", "yellow", "green")
