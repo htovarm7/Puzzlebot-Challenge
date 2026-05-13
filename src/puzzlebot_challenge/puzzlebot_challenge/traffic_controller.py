@@ -149,6 +149,7 @@ class TrafficLightNode(Node):
         image_topic      = self.get_parameter("image_topic").value
         self.sub_img     = self.create_subscription(Image, image_topic, self._on_image, 10)
         self.pub_state   = self.create_publisher(String, "/traffic_light", 10)
+        self.pub_debug   = self.create_publisher(Image, "/vision/traffic", 10)
 
         self._current_state   = "none"
         self._candidate       = "none"
@@ -177,13 +178,14 @@ class TrafficLightNode(Node):
 
         detected, counts = self.detector.detect_state(frame)
 
-        if self.debug:
-            self.get_logger().info(
-                f"R={counts.get('red',0):5d} "
-                f"Y={counts.get('yellow',0):5d} "
-                f"G={counts.get('green',0):5d} → {detected}"
-            )
+        # Raw pixel counts every frame
+        self.get_logger().info(
+            f"R={counts.get('red',0):5d} "
+            f"Y={counts.get('yellow',0):5d} "
+            f"G={counts.get('green',0):5d} → {detected.upper()}"
+        )
 
+        # Hysteresis
         if detected == self._candidate:
             self._candidate_count += 1
         else:
@@ -191,11 +193,54 @@ class TrafficLightNode(Node):
             self._candidate_count = 1
 
         if self._candidate_count >= stable_frames and self._candidate != self._current_state:
-            self.get_logger().info(
-                f"Semaforo: {self._current_state} → {self._candidate}"
-            )
             self._current_state = self._candidate
             self._publish_now()
+            label = self._current_state.upper()
+            self.get_logger().info(f"*** {label} ***")
+
+        # Debug image → /vision/traffic
+        self._publish_debug(frame, detected, counts)
+
+    # ── Imagen de debug ───────────────────────────────────────────────────────
+    _OVERLAY_BGR = {
+        "red":    (0,   0,   220),
+        "yellow": (0,   210, 210),
+        "green":  (0,   200, 0),
+        "none":   (80,  80,  80),
+    }
+
+    def _publish_debug(self, frame: np.ndarray, detected: str, counts: dict):
+        if self.pub_debug.get_subscription_count() == 0:
+            return
+
+        vis = frame.copy()
+
+        # Color overlay on detected pixels
+        if detected != "none" and detected in self.detector.hsv_ranges:
+            hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+            for lo, hi in self.detector.hsv_ranges[detected]:
+                mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+            color_fill = np.full_like(frame, self._OVERLAY_BGR[detected])
+            vis[mask > 0] = cv2.addWeighted(frame, 0.3, color_fill, 0.7, 0)[mask > 0]
+
+        # Banner at top
+        banner_color = self._OVERLAY_BGR.get(detected, (80, 80, 80))
+        cv2.rectangle(vis, (0, 0), (vis.shape[1], 28), banner_color, -1)
+        label = detected.upper() if detected != "none" else "NONE"
+        cv2.putText(vis, label, (6, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        # Pixel counts at bottom
+        info = (f"R:{counts.get('red',0)}  "
+                f"Y:{counts.get('yellow',0)}  "
+                f"G:{counts.get('green',0)}")
+        cv2.putText(vis, info, (4, vis.shape[0] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1)
+
+        msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.pub_debug.publish(msg)
 
     # ── Publicación ───────────────────────────────────────────────────────────
     def _publish_now(self):
