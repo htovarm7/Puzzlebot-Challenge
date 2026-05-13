@@ -24,10 +24,12 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'picam_publisher = puzzlebot_challenge.picam_publisher:main',
-            'cam_server      = puzzlebot_challenge.cam_server:main',
-            'pid_controller  = puzzlebot_challenge.pid_controller:main',
-            'pid_tuner       = puzzlebot_challenge.pid_tuner:main',
+            'picam_publisher  = puzzlebot_challenge.picam_publisher:main',
+            'cam_server       = puzzlebot_challenge.cam_server:main',
+            'pid_controller   = puzzlebot_challenge.pid_controller:main',
+            'pid_tuner        = puzzlebot_challenge.pid_tuner:main',
+            'hsv_calibrator   = puzzlebot_challenge.hsv_calibrator:main',
+            'traffic_detector = puzzlebot_challenge.traffic_controller:main',
         ],
     },
 )
