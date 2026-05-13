@@ -1,0 +1,27 @@
+# ROS2 workspace
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Camera test outputs
+*.jpg
+*.png
+!docs/**/*.png
+!docs/**/*.jpg

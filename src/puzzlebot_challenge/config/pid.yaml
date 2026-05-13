@@ -1,0 +1,48 @@
+pid_controller:
+  ros__parameters:
+    # Tarea: SQUARE o WAYPOINTS
+    task: SQUARE
+
+    # Geometría
+    wheel_radius: 0.05
+    wheel_base: 0.19
+
+    # Límites de velocidad
+    v_max: 0.20
+    v_min: 0.04
+    w_max: 0.80
+    w_min: 0.08
+
+    # Ganancias PID distancia
+    kp_dist: 1.20
+    ki_dist: 0.02
+    kd_dist: 0.10
+
+    # Ganancias PID heading
+    kp_head: 2.50
+    ki_head: 0.05
+    kd_head: 0.20
+
+    # Anti-windup
+    i_max: 0.30
+
+    # Tolerancias
+    dist_tol: 0.03
+    angle_tol: 0.03
+
+    # Watchdog
+    timeout_factor: 2.5
+
+    # Periodo del loop de control [s]
+    control_period: 0.05
+
+    # Retraso inicial antes de arrancar [s]
+    startup_delay: 2.0
+
+    # Waypoints (sólo se usan si task == WAYPOINTS).
+    # Lista plana [x1, y1, x2, y2, ...]
+    waypoints: [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]
+
+    # Square: lado y giro [m, rad]
+    square_side: 2.0
+    square_turn: 1.5707963267948966  # pi/2
