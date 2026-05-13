@@ -2,449 +2,710 @@
 """
 puzzlebot_pid_tuner.py
 ======================
-Nodo de sintonización de PIDs para el PuzzleBot (ROS2 Humble).
+Step-response based PD tuner for the PuzzleBot waypoint controller,
+with built-in odometry diagnostics.
 
-Ejecuta UN solo segmento de prueba (recto o giro) en bucle infinito,
-publicando métricas en tiempo real para que puedas observar la respuesta
-y ajustar las ganancias SIN reiniciar el nodo.
+WHAT THIS SCRIPT DOES (conceptually)
+------------------------------------
+It runs ONE closed-loop step response so you can read off rise time,
+overshoot, settling time, and steady-state error -- the four numbers
+you need to tune a PD controller.
 
-Modos de prueba
+  HEADING MODE:
+    1. Wait for encoders to start publishing.
+    2. Take a snapshot of the current heading: target_th = pose_th + step.
+    3. Every 50 ms:
+        - Integrate encoder readings to update pose_th.
+        - Compute err = target_th - pose_th.
+        - Send omega = Kp*err + Kd*derr/dt to the wheels.
+    4. Robot rotates -> encoders report rotation -> pose_th catches up
+       -> err shrinks -> omega shrinks -> robot settles.
+    5. When |err| stays inside a tolerance band for SETTLE_TIME seconds,
+       declare "settled" and report metrics.
+
+  DISTANCE MODE: same idea but with a forward-distance step, and the
+  heading PD also runs to keep the robot pointing at the goal.
+
+CRITICAL: the whole loop relies on pose updating from encoders. If the
+encoders don't publish, or publish with the wrong sign, pose stays
+frozen at 0, err stays at +step forever, and the robot spins endlessly
+while the tuner reports "NOT SETTLED, steady-state error = step".
+
+That's why this script also runs ODOMETRY DIAGNOSTICS at startup and
+keeps printing wL/wR/pose every 0.2 s so you can SEE whether feedback
+is working.
+
+DEBUGGING MODES
 ---------------
-  straight   : avanza TARGET_DIST metros, se detiene, regresa, repite.
-  turn       : gira TARGET_ANGLE grados, regresa al origen, repite.
+  --open-loop       Bypass feedback entirely. Sends a constant
+                    omega (heading) or v (distance) for a few seconds.
+                    Use this to verify the wheels actually move and to
+                    observe which sign the encoders return.
 
-Ajuste en caliente (ROS2 parameters)
--------------------------------------
-Mientras el nodo corre, en otra terminal:
+  --flip-left       Negate /VelEncL inside the node.
+  --flip-right      Negate /VelEncR inside the node.
+  --swap            Swap left and right encoder readings.
 
-  # Ver todos los parámetros actuales
-  ros2 param list /pid_tuner
+USAGE
+-----
+  # 1) First check the plumbing:
+  python3 puzzlebot_pid_tuner.py heading --open-loop
+  #    Robot should turn LEFT for ~3 s. Watch the printed wL/wR values:
+  #      - If wL is NEGATIVE and wR is POSITIVE during left turn -> normal
+  #        (matches the formula w = R*(wR - wL)/B, which gives w > 0).
+  #      - If BOTH wL and wR are positive (absolute-value encoder) -> you
+  #        will need extra logic; this code can't fix that case alone.
+  #      - If they're swapped vs what you expect -> use --swap.
+  #      - If pose_th decreases during a left turn -> use --flip-left
+  #        AND --flip-right (sign convention inverted overall).
 
-  # Cambiar una ganancia (efecto inmediato en el siguiente ciclo)
-  ros2 param set /pid_tuner kp_dist 1.5
-  ros2 param set /pid_tuner ki_dist 0.03
-  ros2 param set /pid_tuner kd_dist 0.12
-  ros2 param set /pid_tuner kp_head 2.8
-  ros2 param set /pid_tuner ki_head 0.04
-  ros2 param set /pid_tuner kd_head 0.25
+  # 2) Once odometry tracks correctly, run the real tuner:
+  python3 puzzlebot_pid_tuner.py heading           # 90 deg step
+  python3 puzzlebot_pid_tuner.py heading 60        # 60 deg step
+  python3 puzzlebot_pid_tuner.py distance          # 1.0 m step
+  python3 puzzlebot_pid_tuner.py distance 0.5      # 0.5 m step
 
-  # Cambiar el modo de prueba
-  ros2 param set /pid_tuner mode straight   # o: turn
+TUNING ORDER
+------------
+Tune HEADING first, then DISTANCE.
 
-  # Cambiar la distancia / ángulo objetivo
-  ros2 param set /pid_tuner target_dist 1.0   # metros
-  ros2 param set /pid_tuner target_angle 90.0 # grados
+1) HEADING (KP_TH, KD_TH)
+   - Start KP_TH = 1.5, KD_TH = 0.
+   - Run `heading 90`. Increase KP_TH until you see 10-20% overshoot.
+   - Add KD_TH (~ KP_TH/10) to kill overshoot. Aim for <5% overshoot.
+   - Verify with small step (15 deg) AND large step (170 deg).
+   - Targets: rise time < 0.6 s, overshoot < 5 deg, ss error < 1 deg.
 
-Métricas publicadas (Float32)
-------------------------------
-  /tuner/error_dist   — error de distancia al objetivo [m]
-  /tuner/error_head   — error de heading [rad]
-  /tuner/cmd_v        — velocidad lineal comandada [m/s]
-  /tuner/cmd_w        — velocidad angular comandada [rad/s]
-  /tuner/pose_x       — posición X estimada [m]
-  /tuner/pose_y       — posición Y estimada [m]
-  /tuner/pose_th      — heading estimado [rad]
-  /tuner/travelled    — distancia recorrida en segmento actual [m]
+2) DISTANCE (KP_DIST, KD_DIST), with tuned heading gains in place
+   - Start KP_DIST = 0.5, KD_DIST = 0.
+   - Run `distance 1.0`. Increase KP_DIST until rise time is good or
+     v_cmd starts saturating V_MAX (further KP is useless past that).
+   - Add KD_DIST (~ KP_DIST/6) to suppress arrival overshoot.
+   - Targets: stops within 3 cm, <5 cm overshoot, no creep.
 
-Grafica las métricas en tiempo real con:
-  ros2 run rqt_plot rqt_plot /tuner/error_dist /tuner/error_head /tuner/cmd_v
+3) Full waypoint run with the tuned gains.
+   - Curves on straights: raise KP_TH.
+   - Side-to-side oscillation: raise KD_TH.
+   - Overshoots waypoints: raise KD_DIST or lower KP_DIST.
 
-CLI usage
----------
-  python3 puzzlebot_pid_tuner.py straight
-  python3 puzzlebot_pid_tuner.py turn
-
-Author: Armando / MCR2 Mini Challenge 1 — PID Tuning Tool
+Topics: /VelocitySetL, /VelocitySetR (publishers, default QoS)
+        /VelocityEncL, /VelocityEncR (subscribers, sensor-data QoS / BEST_EFFORT)
 """
 
 import sys
 import math
+import time
+import csv
 import rclpy
 from rclpy.node import Node
-from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Robot constants
-# ─────────────────────────────────────────────────────────────────────────────
-WHEEL_RADIUS = 0.05   # [m]
-WHEEL_BASE   = 0.19   # [m]
+# ============================================================
+# Robot params  (must match puzzlebot_motion_pd.py exactly)
+# ============================================================
+WHEEL_RADIUS = 0.048
+WHEEL_BASE   = 0.19
 
-V_MAX  = 0.30   # [m/s]
-V_MIN  = 0.04   # [m/s]
-W_MAX  = 1.20   # [rad/s]
-W_MIN  = 0.08   # [rad/s]
-I_MAX  = 0.30   # anti-windup clamp
+# Chassis orientation (see puzzlebot_motion_pd.py for details)
+FORWARD_SIGN = -1
 
-DIST_TOL  = 0.03   # [m]   goal acceptance
-ANGLE_TOL = 0.03   # [rad] goal acceptance (~1.7°)
+# ============================================================
+# Gains UNDER TEST  -- edit between runs
+# ============================================================
+KP_DIST = 0.9
+KD_DIST = 0.15
+KP_TH   = 2.2
+KD_TH   = 0.25
 
-# Pause between repetitions [s]
-REPEAT_PAUSE = 1.5
+# ============================================================
+# Saturation
+# ============================================================
+V_MAX        = 0.20
+OMEGA_MAX    = 1.2
+HEADING_GATE = math.radians(20.0)
+
+# ============================================================
+# Step / convergence config
+# ============================================================
+CTRL_DT       = 0.05
+SETTLE_TOL_TH = math.radians(2.0)
+SETTLE_TOL_D  = 0.03
+SETTLE_TIME   = 1.0
+TIMEOUT       = 15.0
+STARTUP_WAIT  = 2.0
+
+# Open-loop test config
+OPENLOOP_OMEGA = 0.4    # rad/s for --open-loop heading test
+OPENLOOP_V     = 0.10   # m/s   for --open-loop distance test
+OPENLOOP_DUR   = 3.0    # seconds
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ============================================================
 def wrap_angle(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
-def clamp(val, lo, hi):
-    return max(lo, min(hi, val))
+def unicycle_to_wheels(v, w):
+    wl = (v - w * WHEEL_BASE / 2.0) / WHEEL_RADIUS
+    wr = (v + w * WHEEL_BASE / 2.0) / WHEEL_RADIUS
+    return wl, wr
 
-def unicycle_to_wheels(v, omega):
-    vl = (v - omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
-    vr = (v + omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
-    return vl, vr
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PID
-# ─────────────────────────────────────────────────────────────────────────────
-class PID:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self._integral   = 0.0
-        self._prev_error = None
-
-    def update_gains(self, kp, ki, kd):
-        """Hot-reload gains without resetting integrator."""
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-
-    def reset(self):
-        self._integral   = 0.0
-        self._prev_error = None
-
-    def compute(self, error, dt):
-        p = self.kp * error
-        self._integral = clamp(self._integral + error * dt, -I_MAX, I_MAX)
-        i = self.ki * self._integral
-        d = 0.0
-        if self._prev_error is not None and dt > 1e-6:
-            d = self.kd * (error - self._prev_error) / dt
-        self._prev_error = error
-        return p + i + d
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FSM
-# ─────────────────────────────────────────────────────────────────────────────
-class Phase:
-    WAIT     = "WAIT"       # post-reset pause
-    FORWARD  = "FORWARD"    # executing the test segment
-    RETURN   = "RETURN"     # returning to origin (opposite segment)
+# ============================================================
+class PuzzlebotTuner(Node):
 
+    def __init__(self, mode, step, open_loop, flip_left, flip_right, swap):
+        super().__init__("puzzlebot_pid_tuner")
+        self.mode = mode
+        self.step = step
+        self.open_loop = open_loop
+        self.flip_left  = flip_left
+        self.flip_right = flip_right
+        self.swap       = swap
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tuner node
-# ─────────────────────────────────────────────────────────────────────────────
-class PIDTuner(Node):
+        self.pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
+        self.pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
+        # Encoder topics publish at high rate with BEST_EFFORT reliability,
+        # so subscribers must use a sensor-data QoS profile or no messages
+        # will be received (the "incompatible QoS / RELIABILITY" warning).
+        self.create_subscription(
+            Float32, "/VelocityEncL", self._cb_l, qos_profile_sensor_data)
+        self.create_subscription(
+            Float32, "/VelocityEncR", self._cb_r, qos_profile_sensor_data)
 
-    def __init__(self, initial_mode: str):
-        super().__init__('pid_tuner')
+        # Raw encoder values (before sign overrides)
+        self._raw_wL = 0.0
+        self._raw_wR = 0.0
+        self.got_L = False
+        self.got_R = False
+        self.count_L = 0
+        self.count_R = 0
 
-        # ── ROS2 Parameters (hot-adjustable) ────────────────────────────
-        def _fd(desc, lo=0.0, hi=10.0):
-            d = ParameterDescriptor(description=desc)
-            d.floating_point_range = [FloatingPointRange(from_value=lo, to_value=hi, step=0.0)]
-            return d
+        # Pose
+        self.pose_x = 0.0
+        self.pose_y = 0.0
+        self.pose_th = 0.0
 
-        self.declare_parameter('kp_dist',      1.20,  _fd('P gain — distance PID'))
-        self.declare_parameter('ki_dist',      0.02,  _fd('I gain — distance PID'))
-        self.declare_parameter('kd_dist',      0.10,  _fd('D gain — distance PID'))
-        self.declare_parameter('kp_head',      2.50,  _fd('P gain — heading PID'))
-        self.declare_parameter('ki_head',      0.05,  _fd('I gain — heading PID'))
-        self.declare_parameter('kd_head',      0.20,  _fd('D gain — heading PID'))
-        self.declare_parameter('target_dist',  1.00,  _fd('Test distance [m]', 0.1, 5.0))
-        self.declare_parameter('target_angle', 90.0,  _fd('Test angle [deg]',  10.0, 360.0))
-        self.declare_parameter('mode', initial_mode,
-                               ParameterDescriptor(description='"straight" or "turn"'))
+        # Pose at start of test (for runaway detection)
+        self.pose_th_at_start = 0.0
+        self.pose_xy_at_start = (0.0, 0.0)
 
-        # ── Publishers: motor commands ───────────────────────────────────
-        self.pub_l = self.create_publisher(Float32, '/VelocitySetL', 10)
-        self.pub_r = self.create_publisher(Float32, '/VelocitySetR', 10)
+        # Targets
+        self.target_th = None
+        self.target_x  = None
+        self.target_y  = None
 
-        # ── Publishers: telemetry ────────────────────────────────────────
-        self._tpub = {
-            k: self.create_publisher(Float32, f'/tuner/{k}', 10)
-            for k in ['error_dist', 'error_head', 'cmd_v', 'cmd_w',
-                      'pose_x', 'pose_y', 'pose_th', 'travelled']
-        }
+        self.prev_err    = 0.0
+        self.prev_err_th = 0.0
 
-        # ── Subscribers: encoders ────────────────────────────────────────
-        self.enc_l = 0.0
-        self.enc_r = 0.0
-        self.create_subscription(Float32, '/VelEncL', lambda m: setattr(self, 'enc_l', m.data), 10)
-        self.create_subscription(Float32, '/VelEncR', lambda m: setattr(self, 'enc_r', m.data), 10)
+        self.t0 = None
+        self._start_real_time = None
+        self.last_time = None
+        self.last_log  = -1.0
+        self.settle_since = None
+        self.done = False
 
-        # ── PIDs ─────────────────────────────────────────────────────────
-        self.pid_dist = PID()
-        self.pid_head = PID()
-        self._sync_gains()   # load initial values from parameters
+        self.peak_err  = 0.0
+        self.peak_over = 0.0
+        self.t_rise    = None
+        self.t_settle  = None
 
-        # ── Odometry ─────────────────────────────────────────────────────
-        self.x  = 0.0
-        self.y  = 0.0
-        self.th = 0.0
-        self._last_t = None
+        # CSV
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        suffix = "_openloop" if open_loop else ""
+        self.csv_path = f"/tmp/puzzlebot_tuning_{mode}{suffix}_{ts}.csv"
+        self.csv_file = open(self.csv_path, "w", newline="")
+        self.csv = csv.writer(self.csv_file)
+        self.csv.writerow(["t", "error", "cmd_v", "cmd_w",
+                           "wL", "wR", "pose_x", "pose_y", "pose_th_deg"])
 
-        # ── Iteration bookkeeping ─────────────────────────────────────────
-        self.phase       = Phase.WAIT
-        self.phase_start = None
-        self.seg_start_x = 0.0
-        self.seg_start_y = 0.0
-        self.seg_target_th = 0.0   # desired heading for current segment
-        self.seg_target_dist = 0.0
-        self.iteration   = 0
+        self.timer = self.create_timer(CTRL_DT, self._tick)
 
-        # ── Control loop 20 Hz ───────────────────────────────────────────
-        self.timer = self.create_timer(0.05, self._loop)
+        flags = []
+        if open_loop:  flags.append("OPEN-LOOP")
+        if flip_left:  flags.append("flip-L")
+        if flip_right: flags.append("flip-R")
+        if swap:       flags.append("swap")
+        flag_str = f"  [{', '.join(flags)}]" if flags else ""
+
         self.get_logger().info(
-            f"PID Tuner ready | mode={initial_mode} | "
-            "Adjust gains with:  ros2 param set /pid_tuner kp_dist <value>"
+            f"Tuner mode={mode}  step={step}{flag_str}"
+        )
+        self.get_logger().info(
+            f"  Gains: Kp_d={KP_DIST}  Kd_d={KD_DIST}  "
+            f"Kp_th={KP_TH}  Kd_th={KD_TH}"
+        )
+        self.get_logger().info(
+            f"  Waiting {STARTUP_WAIT:.1f}s for encoders to publish..."
         )
 
-        # Begin first pause
-        self._enter_wait()
+    # ----------------------------------
+    @property
+    def wL(self):
+        v = self._raw_wR if self.swap else self._raw_wL
+        return -v if self.flip_left else v
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Gain sync (called each loop tick)
-    # ─────────────────────────────────────────────────────────────────────
-    def _sync_gains(self):
-        self.pid_dist.update_gains(
-            self.get_parameter('kp_dist').value,
-            self.get_parameter('ki_dist').value,
-            self.get_parameter('kd_dist').value,
-        )
-        self.pid_head.update_gains(
-            self.get_parameter('kp_head').value,
-            self.get_parameter('ki_head').value,
-            self.get_parameter('kd_head').value,
-        )
+    @property
+    def wR(self):
+        v = self._raw_wL if self.swap else self._raw_wR
+        return -v if self.flip_right else v
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Odometry
-    # ─────────────────────────────────────────────────────────────────────
-    def _odom(self, now):
-        if self._last_t is None:
-            self._last_t = now
-            return
-        dt = now - self._last_t
-        self._last_t = now
-        if dt <= 0:
-            return
-        vl = self.enc_l * WHEEL_RADIUS
-        vr = self.enc_r * WHEEL_RADIUS
-        v     = (vr + vl) / 2.0
-        omega = (vr - vl) / WHEEL_BASE
-        self.x  += v * math.cos(self.th) * dt
-        self.y  += v * math.sin(self.th) * dt
-        self.th  = wrap_angle(self.th + omega * dt)
+    def _cb_l(self, m):
+        self._raw_wL = float(m.data)
+        self.got_L = True
+        self.count_L += 1
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Telemetry publisher
-    # ─────────────────────────────────────────────────────────────────────
-    def _pub_tel(self, key, val):
-        m = Float32()
-        m.data = float(val)
-        self._tpub[key].publish(m)
+    def _cb_r(self, m):
+        self._raw_wR = float(m.data)
+        self.got_R = True
+        self.count_R += 1
 
-    def _publish_motors(self, vl, vr):
+    # ----------------------------------
+    def _update_odom(self, dt):
+        v = FORWARD_SIGN * WHEEL_RADIUS * (self.wR + self.wL) / 2.0
+        w = WHEEL_RADIUS * (self.wR - self.wL) / WHEEL_BASE
+        th_mid = self.pose_th + 0.5 * w * dt
+        self.pose_x += v * math.cos(th_mid) * dt
+        self.pose_y += v * math.sin(th_mid) * dt
+        self.pose_th = wrap_angle(self.pose_th + w * dt)
+        return v, w
+
+    def _cmd(self, v, w):
+        v = clamp(v, -V_MAX, V_MAX)
+        w = clamp(w, -OMEGA_MAX, OMEGA_MAX)
+        wl, wr = unicycle_to_wheels(FORWARD_SIGN * v, w)
         ml, mr = Float32(), Float32()
-        ml.data, mr.data = float(vl), float(vr)
+        ml.data, mr.data = float(wl), float(wr)
         self.pub_l.publish(ml)
         self.pub_r.publish(mr)
+        return v, w
 
     def _stop(self):
-        self._publish_motors(0.0, 0.0)
+        z = Float32(); z.data = 0.0
+        self.pub_l.publish(z); self.pub_r.publish(z)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Phase transitions
-    # ─────────────────────────────────────────────────────────────────────
-    def _enter_wait(self):
-        self._stop()
-        self.phase       = Phase.WAIT
-        self.phase_start = self.get_clock().now().nanoseconds / 1e9
-        self.get_logger().info(f"  [iter {self.iteration}] Pausing {REPEAT_PAUSE} s…")
-
-    def _enter_forward(self):
-        mode = self.get_parameter('mode').value
-        self._sync_gains()
-        self.pid_dist.reset()
-        self.pid_head.reset()
-        self.phase       = Phase.FORWARD
-        self.phase_start = self.get_clock().now().nanoseconds / 1e9
-        self.seg_start_x = self.x
-        self.seg_start_y = self.y
-
-        if mode == 'straight':
-            self.seg_target_dist = self.get_parameter('target_dist').value
-            self.seg_target_th   = self.th   # keep current heading
-            self.get_logger().info(
-                f"  [iter {self.iteration}] FORWARD straight "
-                f"{self.seg_target_dist:.2f} m | "
-                f"Kp_d={self.pid_dist.kp:.3f} Ki_d={self.pid_dist.ki:.3f} Kd_d={self.pid_dist.kd:.3f}"
-            )
-        else:   # turn
-            angle_deg = self.get_parameter('target_angle').value
-            angle_rad = math.radians(angle_deg)
-            self.seg_target_th   = wrap_angle(self.th + angle_rad)
-            self.seg_target_dist = 0.0
-            self.get_logger().info(
-                f"  [iter {self.iteration}] FORWARD turn "
-                f"{angle_deg:.1f}° | "
-                f"Kp_h={self.pid_head.kp:.3f} Ki_h={self.pid_head.ki:.3f} Kd_h={self.pid_head.kd:.3f}"
-            )
-
-    def _enter_return(self):
-        mode = self.get_parameter('mode').value
-        self._sync_gains()
-        self.pid_dist.reset()
-        self.pid_head.reset()
-        self.phase       = Phase.RETURN
-        self.phase_start = self.get_clock().now().nanoseconds / 1e9
-        self.seg_start_x = self.x
-        self.seg_start_y = self.y
-
-        if mode == 'straight':
-            self.seg_target_dist = self.get_parameter('target_dist').value
-            self.seg_target_th   = wrap_angle(self.th + math.pi)   # reverse direction
-            self.get_logger().info(f"  [iter {self.iteration}] RETURN straight")
-        else:
-            angle_deg = self.get_parameter('target_angle').value
-            angle_rad = math.radians(angle_deg)
-            self.seg_target_th   = wrap_angle(self.th - angle_rad)  # opposite turn
-            self.seg_target_dist = 0.0
-            self.get_logger().info(f"  [iter {self.iteration}] RETURN turn -{angle_deg:.1f}°")
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Control loop
-    # ─────────────────────────────────────────────────────────────────────
-    def _loop(self):
+    # ----------------------------------
+    def _tick(self):
         now = self.get_clock().now().nanoseconds / 1e9
-        self._odom(now)
-        self._sync_gains()   # pick up any ros2 param set changes
-        dt = 0.05
 
-        mode = self.get_parameter('mode').value
+        # ---- one-time init / startup wait ----
+        if self.t0 is None:
+            if self._start_real_time is None:
+                self._start_real_time = now
+                self.last_time = now
+                return
+            if now - self._start_real_time < STARTUP_WAIT:
+                self.last_time = now
+                return
 
-        # ── WAIT ────────────────────────────────────────────────────────
-        if self.phase == Phase.WAIT:
-            self._stop()
-            if now - self.phase_start >= REPEAT_PAUSE:
-                self.iteration += 1
-                self._enter_forward()
+            # --- Encoder diagnostic at end of startup ---
+            self.get_logger().info("--- ENCODER STARTUP DIAGNOSTIC ---")
+            self.get_logger().info(
+                f"  /VelocityEncL : received {self.count_L} msg  "
+                f"(last value = {self._raw_wL:+.4f} rad/s)"
+            )
+            self.get_logger().info(
+                f"  /VelocityEncR : received {self.count_R} msg  "
+                f"(last value = {self._raw_wR:+.4f} rad/s)"
+            )
+            if not self.got_L or not self.got_R:
+                self.get_logger().error(
+                    "  >>> ONE OR BOTH ENCODER TOPICS ARE NOT PUBLISHING."
+                )
+                self.get_logger().error(
+                    "  >>> Check:  ros2 topic list  |  grep Velocity"
+                )
+                self.get_logger().error(
+                    "  >>> Without encoder data, closed loop CANNOT work."
+                )
+                if not self.open_loop:
+                    self.get_logger().error(
+                        "  >>> Aborting. Use --open-loop to test wheels anyway."
+                    )
+                    self._stop()
+                    self.done = True
+                    self.timer.cancel()
+                    rclpy.shutdown()
+                    return
+            else:
+                self.get_logger().info("  >>> Both encoders OK.")
+            self.get_logger().info("----------------------------------")
+
+            # latch target relative to current pose
+            self.pose_th_at_start = self.pose_th
+            self.pose_xy_at_start = (self.pose_x, self.pose_y)
+            if self.mode == "heading":
+                self.target_th = wrap_angle(self.pose_th + self.step)
+            else:
+                self.target_x = self.pose_x + self.step * math.cos(self.pose_th)
+                self.target_y = self.pose_y + self.step * math.sin(self.pose_th)
+                self.target_th = self.pose_th
+            self.t0 = now
+            self.last_time = now
+            if self.open_loop:
+                self.get_logger().info(
+                    f"[t=0] OPEN-LOOP test engaged.  "
+                    f"Will run {OPENLOOP_DUR:.1f}s then stop."
+                )
+            else:
+                self.get_logger().info(
+                    f"[t=0] Closed-loop step engaged.  step={self.step}"
+                )
             return
 
-        # ── Shared: compute travelled distance ───────────────────────────
-        travelled = math.hypot(self.x - self.seg_start_x,
-                               self.y - self.seg_start_y)
+        if self.done:
+            self._stop()
+            return
 
-        # ── STRAIGHT segments ────────────────────────────────────────────
-        if mode == 'straight':
-            err_dist = self.seg_target_dist - travelled
-            err_head = wrap_angle(self.seg_target_th - self.th)
+        dt = max(1e-3, now - self.last_time)
+        self.last_time = now
+        t = now - self.t0
 
-            # Telemetry
-            self._pub_tel('error_dist', err_dist)
-            self._pub_tel('error_head', err_head)
-            self._pub_tel('travelled',  travelled)
-            self._pub_tel('pose_x', self.x)
-            self._pub_tel('pose_y', self.y)
-            self._pub_tel('pose_th', self.th)
+        v_meas, w_meas = self._update_odom(dt)
 
-            if err_dist < DIST_TOL:
+        # ============================================================
+        # OPEN-LOOP MODE -- ignore feedback, just send a fixed command
+        # ============================================================
+        if self.open_loop:
+            if t >= OPENLOOP_DUR:
                 self._stop()
-                self.get_logger().info(
-                    f"    Goal reached | travelled={travelled:.3f} m  "
-                    f"err={err_dist*100:.1f} cm  heading_err={math.degrees(err_head):.2f}°"
-                )
-                if self.phase == Phase.FORWARD:
-                    self._enter_return()
-                else:
-                    self._enter_wait()
+                self._open_loop_summary(t)
                 return
+            if self.mode == "heading":
+                v_cmd, w_cmd = 0.0, OPENLOOP_OMEGA
+            else:
+                v_cmd, w_cmd = OPENLOOP_V, 0.0
+            v_real, w_real = self._cmd(v_cmd, w_cmd)
 
-            raw_v = self.pid_dist.compute(err_dist, dt)
-            if 0 < raw_v < V_MIN:
-                raw_v = V_MIN
-            v = clamp(raw_v, 0.0, V_MAX)
+            self.csv.writerow([
+                f"{t:.3f}", "0.0", f"{v_real:.4f}", f"{w_real:.4f}",
+                f"{self.wL:.4f}", f"{self.wR:.4f}",
+                f"{self.pose_x:.4f}", f"{self.pose_y:.4f}",
+                f"{math.degrees(self.pose_th):.3f}",
+            ])
 
-            raw_w = self.pid_head.compute(err_head, dt)
-            omega = clamp(raw_w, -W_MAX, W_MAX)
+            if t - self.last_log >= 0.2:
+                self.last_log = t
+                self.get_logger().info(
+                    f"[OL] t={t:4.2f}  cmd v={v_real:+.3f} w={w_real:+.3f}  "
+                    f"enc wL={self.wL:+.3f} wR={self.wR:+.3f}  "
+                    f"odom v={v_meas:+.3f} w={w_meas:+.3f}  "
+                    f"pose=({self.pose_x:+.2f},{self.pose_y:+.2f},"
+                    f"{math.degrees(self.pose_th):+6.1f})"
+                )
+            return
 
-            self._pub_tel('cmd_v', v)
-            self._pub_tel('cmd_w', omega)
-
-            vl, vr = unicycle_to_wheels(v, omega)
-            self._publish_motors(vl, vr)
-
-        # ── TURN segments ────────────────────────────────────────────────
+        # ============================================================
+        # CLOSED-LOOP MODE
+        # ============================================================
+        if self.mode == "heading":
+            err = wrap_angle(self.target_th - self.pose_th)
+            d_err = (err - self.prev_err) / dt
+            self.prev_err = err
+            v_cmd = 0.0
+            w_cmd = KP_TH * err + KD_TH * d_err
+            settled = abs(err) < SETTLE_TOL_TH
+            error_for_log = math.degrees(err)
+            error_unit = "deg"
+            step_magnitude = math.degrees(self.step)
         else:
-            err_head = wrap_angle(self.seg_target_th - self.th)
-            err_dist = 0.0   # not used in turn mode
+            dx = self.target_x - self.pose_x
+            dy = self.target_y - self.pose_y
+            dist = math.hypot(dx, dy)
+            ang_to_goal = math.atan2(dy, dx)
+            err_th = wrap_angle(ang_to_goal - self.pose_th)
+            err_d = dx * math.cos(self.pose_th) + dy * math.sin(self.pose_th)
 
-            self._pub_tel('error_dist', err_dist)
-            self._pub_tel('error_head', err_head)
-            self._pub_tel('travelled',  abs(err_head))   # repurpose as angle remaining
-            self._pub_tel('pose_x', self.x)
-            self._pub_tel('pose_y', self.y)
-            self._pub_tel('pose_th', self.th)
+            d_err = (err_d - self.prev_err)    / dt
+            d_th  = (err_th - self.prev_err_th) / dt
+            self.prev_err    = err_d
+            self.prev_err_th = err_th
 
-            if abs(err_head) < ANGLE_TOL:
-                self._stop()
-                self.get_logger().info(
-                    f"    Turn done | err={math.degrees(err_head):.2f}°"
-                )
-                if self.phase == Phase.FORWARD:
-                    self._enter_return()
-                else:
-                    self._enter_wait()
+            v_cmd = KP_DIST * err_d + KD_DIST * d_err
+            w_cmd = KP_TH   * err_th + KD_TH * d_th
+            if abs(err_th) > HEADING_GATE:
+                v_cmd *= max(0.0, 1.0 - abs(err_th) / math.pi)
+            v_cmd = max(0.0, v_cmd)
+
+            settled = dist < SETTLE_TOL_D
+            error_for_log = err_d
+            error_unit = "m"
+            step_magnitude = self.step
+
+        v_real, w_real = self._cmd(v_cmd, w_cmd)
+
+        self.csv.writerow([
+            f"{t:.3f}", f"{error_for_log:.5f}",
+            f"{v_real:.4f}", f"{w_real:.4f}",
+            f"{self.wL:.4f}", f"{self.wR:.4f}",
+            f"{self.pose_x:.4f}", f"{self.pose_y:.4f}",
+            f"{math.degrees(self.pose_th):.3f}",
+        ])
+
+        # --- RUNAWAY GUARD --------------------------------------------------
+        # If we've been commanding motion for > 2 s and odometry barely moved,
+        # something is wrong with feedback -- abort before circling forever.
+        if t > 2.0:
+            if self.mode == "heading":
+                pose_moved = abs(wrap_angle(
+                    self.pose_th - self.pose_th_at_start))
+                if abs(w_real) > 0.1 and pose_moved < math.radians(5.0):
+                    self._abort_runaway(
+                        t,
+                        f"Commanding w={w_real:+.2f} rad/s for 2 s but "
+                        f"pose_th moved only {math.degrees(pose_moved):.2f} deg.",
+                    )
+                    return
+            else:
+                dxm = self.pose_x - self.pose_xy_at_start[0]
+                dym = self.pose_y - self.pose_xy_at_start[1]
+                pose_moved = math.hypot(dxm, dym)
+                if abs(v_real) > 0.05 and pose_moved < 0.05:
+                    self._abort_runaway(
+                        t,
+                        f"Commanding v={v_real:+.2f} m/s for 2 s but "
+                        f"pose moved only {pose_moved*100:.1f} cm.",
+                    )
+                    return
+
+        # --- metrics ---
+        if abs(error_for_log) > self.peak_err:
+            self.peak_err = abs(error_for_log)
+        if step_magnitude > 0 and error_for_log < -self.peak_over:
+            self.peak_over = -error_for_log
+        elif step_magnitude < 0 and error_for_log > self.peak_over:
+            self.peak_over = error_for_log
+        if self.t_rise is None and abs(error_for_log) <= 0.1 * abs(step_magnitude):
+            self.t_rise = t
+
+        if settled:
+            if self.settle_since is None:
+                self.settle_since = t
+            elif (t - self.settle_since) >= SETTLE_TIME:
+                self.t_settle = self.settle_since
+                self._finish(t, error_for_log, error_unit, step_magnitude,
+                             reason="SETTLED")
                 return
+        else:
+            self.settle_since = None
 
-            raw_w = self.pid_head.compute(err_head, dt)
-            if abs(raw_w) < W_MIN:
-                raw_w = math.copysign(W_MIN, raw_w)
-            omega = clamp(raw_w, -W_MAX, W_MAX)
+        if t > TIMEOUT:
+            self._finish(t, error_for_log, error_unit, step_magnitude,
+                         reason="TIMEOUT")
+            return
 
-            self._pub_tel('cmd_v', 0.0)
-            self._pub_tel('cmd_w', omega)
+        if t - self.last_log >= 0.2:
+            self.last_log = t
+            self.get_logger().info(
+                f"t={t:5.2f}  err={error_for_log:+7.3f}{error_unit}  "
+                f"cmd v={v_real:+.3f} w={w_real:+.3f}  "
+                f"enc wL={self.wL:+.2f} wR={self.wR:+.2f}  "
+                f"pose=({self.pose_x:+.2f},{self.pose_y:+.2f},"
+                f"{math.degrees(self.pose_th):+6.1f})"
+            )
 
-            vl, vr = unicycle_to_wheels(0.0, omega)
-            self._publish_motors(vl, vr)
+    # ----------------------------------
+    def _open_loop_summary(self, t):
+        self.done = True
+        self.csv_file.flush(); self.csv_file.close()
+        moved_th = math.degrees(wrap_angle(
+            self.pose_th - self.pose_th_at_start))
+        dx = self.pose_x - self.pose_xy_at_start[0]
+        dy = self.pose_y - self.pose_xy_at_start[1]
+        moved_d = math.hypot(dx, dy)
+
+        self.get_logger().info("=" * 60)
+        self.get_logger().info(f"OPEN-LOOP TEST COMPLETE  ({t:.2f} s)")
+        if self.mode == "heading":
+            expected_th = math.degrees(OPENLOOP_OMEGA * OPENLOOP_DUR)
+            self.get_logger().info(
+                f"  commanded omega : +{OPENLOOP_OMEGA:.2f} rad/s "
+                f"for {OPENLOOP_DUR:.1f}s")
+            self.get_logger().info(
+                f"  expected pose_th change : ~+{expected_th:.0f} deg (left turn)")
+            self.get_logger().info(
+                f"  actual pose_th change   :  {moved_th:+.1f} deg")
+            self.get_logger().info(
+                f"  last enc values         : wL={self.wL:+.3f}  wR={self.wR:+.3f}"
+                f"  (after flip/swap flags)")
+            self.get_logger().info("")
+            self.get_logger().info("Interpretation:")
+            self.get_logger().info("  - If robot DID rotate left physically:")
+            if abs(moved_th) < 5.0:
+                self.get_logger().info(
+                    "      .. but pose_th barely changed -> encoder signs wrong.")
+                self.get_logger().info(
+                    "         Try: --flip-left  OR  --flip-right  OR  --swap")
+            elif moved_th < -10.0:
+                self.get_logger().info(
+                    "      .. but pose_th DECREASED -> sign convention inverted.")
+                self.get_logger().info(
+                    "         Try: --flip-left AND --flip-right (negate both)")
+            else:
+                self.get_logger().info(
+                    "      .. and pose_th increased correctly. Odometry is GOOD.")
+                self.get_logger().info(
+                    "         Re-run without --open-loop to start tuning.")
+            self.get_logger().info("  - If robot did NOT rotate physically:")
+            self.get_logger().info(
+                "      .. check wheel power, motor topics, robot/sim state.")
+        else:
+            expected_d = OPENLOOP_V * OPENLOOP_DUR
+            self.get_logger().info(
+                f"  commanded v : +{OPENLOOP_V:.2f} m/s for {OPENLOOP_DUR:.1f}s")
+            self.get_logger().info(f"  expected travel : ~{expected_d:.2f} m")
+            self.get_logger().info(f"  actual travel   :  {moved_d:.3f} m")
+            self.get_logger().info(
+                f"  last enc        : wL={self.wL:+.3f}  wR={self.wR:+.3f}")
+            self.get_logger().info("")
+            if moved_d < 0.05:
+                self.get_logger().info(
+                    "  -> pose did not advance: encoder signs likely wrong.")
+                self.get_logger().info(
+                    "     If one encoder is negative during forward motion,")
+                self.get_logger().info(
+                    "     use --flip-left or --flip-right.")
+            elif abs(moved_d - expected_d) / expected_d > 0.3:
+                self.get_logger().info(
+                    "  -> distance off by >30%: check WHEEL_RADIUS calibration.")
+            else:
+                self.get_logger().info(
+                    "  -> odometry tracks well. Re-run without --open-loop.")
+        self.get_logger().info(f"  csv trace : {self.csv_path}")
+        self.get_logger().info("=" * 60)
+        self.timer.cancel()
+
+    # ----------------------------------
+    def _abort_runaway(self, t, msg):
+        self.done = True
+        self._stop()
+        self.csv_file.flush(); self.csv_file.close()
+        self.get_logger().error("=" * 60)
+        self.get_logger().error("ABORT: RUNAWAY DETECTED (closed loop not closing)")
+        self.get_logger().error(f"  {msg}")
+        self.get_logger().error("")
+        self.get_logger().error("This almost always means encoder feedback is broken.")
+        self.get_logger().error("Diagnose with:")
+        self.get_logger().error(
+            f"  python3 {sys.argv[0]} {self.mode} --open-loop")
+        self.get_logger().error("")
+        self.get_logger().error("Check in another terminal:")
+        self.get_logger().error("  ros2 topic echo /VelocityEncL --once")
+        self.get_logger().error("  ros2 topic echo /VelocityEncR --once")
+        self.get_logger().error("  ros2 topic hz   /VelocityEncL")
+        self.get_logger().error(f"  csv trace : {self.csv_path}")
+        self.get_logger().error("=" * 60)
+        self.timer.cancel()
+
+    # ----------------------------------
+    def _finish(self, t_end, final_err, unit, step_magnitude, reason):
+        self.done = True
+        self._stop()
+        self.csv_file.flush(); self.csv_file.close()
+        overshoot_pct = (self.peak_over / abs(step_magnitude) * 100.0
+                         if step_magnitude != 0 else 0.0)
+        self.get_logger().info("=" * 60)
+        self.get_logger().info(f"RUN COMPLETE  reason={reason}")
+        self.get_logger().info(f"  mode           : {self.mode}")
+        self.get_logger().info(f"  step           : {step_magnitude:+.3f} {unit}")
+        self.get_logger().info(
+            f"  gains          : Kp_d={KP_DIST} Kd_d={KD_DIST} "
+            f"Kp_th={KP_TH} Kd_th={KD_TH}")
+        self.get_logger().info(
+            f"  rise time (10%): {self.t_rise:.3f} s"
+            if self.t_rise else "  rise time      : n/a")
+        self.get_logger().info(
+            f"  settling time  : {self.t_settle:.3f} s"
+            if self.t_settle else "  settling time  : NOT SETTLED")
+        self.get_logger().info(
+            f"  overshoot      : {self.peak_over:+.4f} {unit}  "
+            f"({overshoot_pct:.1f}%)")
+        self.get_logger().info(f"  steady-state e : {final_err:+.4f} {unit}")
+        self.get_logger().info(f"  total time     : {t_end:.3f} s")
+        self.get_logger().info(f"  csv trace      : {self.csv_path}")
+        self.get_logger().info("=" * 60)
+        self._verdict(overshoot_pct, final_err, unit, step_magnitude)
+        self.timer.cancel()
+
+    def _verdict(self, overshoot_pct, ss_err, unit, step_magnitude):
+        tips = []
+        if self.t_settle is None:
+            if abs(ss_err - step_magnitude) < 0.1 * abs(step_magnitude):
+                tips.append(
+                    "Error stayed near the FULL STEP value -- pose isn't "
+                    "updating from encoders. Run with --open-loop and "
+                    "fix odometry/signs before tuning."
+                )
+            else:
+                tips.append("Did not settle: lower KP, OR raise KD, OR widen tolerance.")
+        if overshoot_pct > 15:
+            tips.append("High overshoot: raise KD or lower KP.")
+        elif overshoot_pct < 1 and self.t_rise and self.t_rise > 1.0:
+            tips.append("Sluggish, no overshoot: raise KP.")
+        if abs(ss_err) > (math.degrees(SETTLE_TOL_TH) if unit == "deg"
+                          else SETTLE_TOL_D):
+            tips.append(
+                f"Steady-state error {ss_err:+.3f}{unit}: "
+                f"check WHEEL_RADIUS / WHEEL_BASE calibration before adding I."
+            )
+        if self.t_rise and self.t_rise < 0.15:
+            tips.append("Very fast rise -- check for wheel slip on this surface.")
+        if not tips:
+            tips.append("Looks good. Try the full waypoint run with these gains.")
+        self.get_logger().info("Suggested next step:")
+        for s in tips:
+            self.get_logger().info(f"  - {s}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
+# ============================================================
 def main(args=None):
-    valid = {'straight', 'turn'}
-    cli   = [a for a in sys.argv[1:] if not a.startswith('--')]
-    mode  = cli[0].lower() if cli and cli[0].lower() in valid else 'straight'
+    raw = sys.argv[1:]
+    cli = [a for a in raw if not a.startswith("--ros-args") and a != "--"]
 
-    if not cli or cli[0].lower() not in valid:
-        print(f"[INFO] Usage: python3 puzzlebot_pid_tuner.py [straight|turn]")
-        print(f"[INFO] Defaulting to mode=straight")
+    flags = {a for a in cli if a.startswith("--")}
+    positional = [a for a in cli if not a.startswith("--")]
 
-    print(f"[INFO] Tuner mode = {mode}\n")
+    if not positional or positional[0] not in ("heading", "distance"):
+        print("Usage:")
+        print("  python3 puzzlebot_pid_tuner.py heading  [deg]  "
+              "[--open-loop] [--flip-left] [--flip-right] [--swap]")
+        print("  python3 puzzlebot_pid_tuner.py distance [m]    "
+              "[--open-loop] [--flip-left] [--flip-right] [--swap]")
+        print()
+        print("Recommended first run if odometry is unverified:")
+        print("  python3 puzzlebot_pid_tuner.py heading --open-loop")
+        return
+
+    mode = positional[0]
+    if mode == "heading":
+        deg = float(positional[1]) if len(positional) > 1 else 90.0
+        step = math.radians(deg)
+    else:
+        step = float(positional[1]) if len(positional) > 1 else 1.0
 
     rclpy.init(args=args)
-    node = PIDTuner(initial_mode=mode)
-
+    node = PuzzlebotTuner(
+        mode=mode,
+        step=step,
+        open_loop="--open-loop" in flags,
+        flip_left="--flip-left" in flags,
+        flip_right="--flip-right" in flags,
+        swap="--swap" in flags,
+    )
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().warn('Keyboard interrupt — stopping motors.')
+        node.get_logger().warn("Interrupted -- stopping motors.")
         node._stop()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
