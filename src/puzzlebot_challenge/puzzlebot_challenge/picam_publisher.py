@@ -69,6 +69,7 @@ class PiCamPublisher(Node):
         if not ok:
             self.get_logger().warn("Frame vacío de la cámara.")
             return
+        frame = cv2.flip(frame, 0)
         msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.frame_id
