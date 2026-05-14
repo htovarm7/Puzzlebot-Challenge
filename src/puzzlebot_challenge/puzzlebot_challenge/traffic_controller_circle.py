@@ -31,7 +31,6 @@ RANGOS_HSV = {
     "green":  [(np.array([45,  80, 80]), np.array([85,  255, 255]))],
 }
 
-
 def classify_color_in_circle(frame_bgr, cx, cy, r):
     """
     Recorta el círculo (con una máscara para no contar pixeles fuera del círculo)
