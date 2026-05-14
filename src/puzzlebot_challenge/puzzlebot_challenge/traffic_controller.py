@@ -77,7 +77,7 @@ def _load_hsv_yaml(path: str) -> dict | None:
 class TrafficLightDetection:
     """Testeable independientemente de ROS con cualquier imagen BGR."""
 
-    def __init__(self, min_area: int = 200, min_circularity: float = 0.60,
+    def __init__(self, min_area: int = 150, min_circularity: float = 0.60,
                  roi_fraction: float = 1.0, hsv_ranges: dict | None = None):
         self.min_area        = min_area
         self.min_circularity = min_circularity
@@ -156,7 +156,7 @@ class TrafficLightNode(Node):
         super().__init__("traffic_light_detector")
 
         self.declare_parameter(
-            "min_area", 200,
+            "min_area", 150,
             ParameterDescriptor(description="Área mínima (px²) del blob circular"))
         self.declare_parameter(
             "min_circularity", 0.60,
@@ -230,17 +230,8 @@ class TrafficLightNode(Node):
 
         detected, scores = self.detector.detect_state(frame)
 
-        # Log every frame — show all color scores so we can tune thresholds
-        r = scores.get("red",    {})
-        y = scores.get("yellow", {})
-        g = scores.get("green",  {})
-        self.get_logger().info(
-            f"detect={detected.upper():6s} | "
-            f"R circ={r.get('circularity',0):.2f} area={r.get('area',0):.0f} | "
-            f"Y circ={y.get('circularity',0):.2f} area={y.get('area',0):.0f} | "
-            f"G circ={g.get('circularity',0):.2f} area={g.get('area',0):.0f} | "
-            f"confirmed={self._current_state.upper()}"
-        )
+        if detected != "none":
+            self.get_logger().info(detected.upper())
 
         # Asymmetric hysteresis:
         #   color → confirmed quickly (stable_frames, default 2)
