@@ -53,7 +53,7 @@ def generate_launch_description():
         condition=is_hsv,
     )
     circles_node = Node(
-        package='puzzlebot_challenge', executable='traffic_detector_circles',
+        package='puzzlebot_challenge', executable='traffic_detector_circle',
         name='traffic_light_detector', output='screen',
         parameters=[config, {'debug': debug}],
         condition=is_circles,
