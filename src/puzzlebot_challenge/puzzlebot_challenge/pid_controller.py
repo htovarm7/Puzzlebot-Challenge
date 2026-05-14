@@ -56,7 +56,7 @@ from std_msgs.msg import Float32
 # ============================================================
 # Robot physical parameters  (MUST match your real PuzzleBot)
 # ============================================================
-WHEEL_RADIUS = 0.048       # [m]
+WHEEL_RADIUS = 0.05154     # [m]  calibrated via linear test (cinta vs odom)
 WHEEL_BASE   = 0.19        # [m]  track width (left-right wheel distance)
 
 # Chassis orientation: set to -1 if the robot is mounted such that what
