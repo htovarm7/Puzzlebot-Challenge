@@ -162,8 +162,11 @@ class TrafficLightNode(Node):
             "min_circularity", 0.60,
             ParameterDescriptor(description="Circularidad mínima 0-1 (1=círculo perfecto)"))
         self.declare_parameter(
-            "stable_frames", 3,
-            ParameterDescriptor(description="Frames consecutivos para confirmar un cambio"))
+            "stable_frames", 2,
+            ParameterDescriptor(description="Frames consecutivos para confirmar un color"))
+        self.declare_parameter(
+            "none_frames", 8,
+            ParameterDescriptor(description="Frames consecutivos de NONE para volver a none"))
         self.declare_parameter(
             "roi_fraction", 1.0,
             ParameterDescriptor(description="Fracción horizontal del ROI desde la izquierda (0-1)"))
@@ -207,7 +210,8 @@ class TrafficLightNode(Node):
             f"TrafficLightNode listo | topic={image_topic} | "
             f"min_area={self.detector.min_area} | "
             f"min_circularity={self.detector.min_circularity} | "
-            f"stable_frames={self.get_parameter('stable_frames').value}"
+            f"stable_frames={self.get_parameter('stable_frames').value} | "
+            f"none_frames={self.get_parameter('none_frames').value}"
         )
 
     # ── Callback de cámara ────────────────────────────────────────────────────
@@ -216,6 +220,7 @@ class TrafficLightNode(Node):
         self.detector.min_circularity = self.get_parameter("min_circularity").value
         self.detector.roi_fraction    = self.get_parameter("roi_fraction").value
         stable_frames                 = self.get_parameter("stable_frames").value
+        none_frames                   = self.get_parameter("none_frames").value
 
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -232,14 +237,18 @@ class TrafficLightNode(Node):
             f"area={s.get('area', 0):.0f} | confirmed={self._current_state.upper()}"
         )
 
-        # Hysteresis
+        # Asymmetric hysteresis:
+        #   color → confirmed quickly (stable_frames, default 2)
+        #   none  → confirmed slowly  (none_frames,   default 8)
+        threshold = none_frames if detected == "none" else stable_frames
+
         if detected == self._candidate:
             self._candidate_count += 1
         else:
             self._candidate       = detected
             self._candidate_count = 1
 
-        if self._candidate_count >= stable_frames and self._candidate != self._current_state:
+        if self._candidate_count >= threshold and self._candidate != self._current_state:
             self._current_state = self._candidate
             self._publish_now()
             self.get_logger().info(f"*** STATE → {self._current_state.upper()} ***")
