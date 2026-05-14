@@ -230,11 +230,16 @@ class TrafficLightNode(Node):
 
         detected, scores = self.detector.detect_state(frame)
 
-        # Log every frame
-        s = scores.get(detected, {})
+        # Log every frame — show all color scores so we can tune thresholds
+        r = scores.get("red",    {})
+        y = scores.get("yellow", {})
+        g = scores.get("green",  {})
         self.get_logger().info(
-            f"[{detected.upper():6s}] circ={s.get('circularity', 0):.2f} "
-            f"area={s.get('area', 0):.0f} | confirmed={self._current_state.upper()}"
+            f"detect={detected.upper():6s} | "
+            f"R circ={r.get('circularity',0):.2f} area={r.get('area',0):.0f} | "
+            f"Y circ={y.get('circularity',0):.2f} area={y.get('area',0):.0f} | "
+            f"G circ={g.get('circularity',0):.2f} area={g.get('area',0):.0f} | "
+            f"confirmed={self._current_state.upper()}"
         )
 
         # Asymmetric hysteresis:
