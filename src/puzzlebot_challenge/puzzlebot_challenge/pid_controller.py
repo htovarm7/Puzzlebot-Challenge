@@ -50,7 +50,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 
 
 # ============================================================
@@ -96,6 +96,21 @@ SETTLE_TICKS  = 5                  # need this many consecutive in-tolerance tic
 # Loop timing
 # =============== =============================================
 CTRL_DT = 0.05             # [s]  20 Hz control loop
+
+# ============================================================
+# Traffic-light reaction
+# Gains applied to v and omega when the matching state is active.
+#   green / none → full speed
+#   yellow       → slow down
+#   red          → full stop (also pauses the watchdog so a long red
+#                  light doesn't time out the segment).
+# ============================================================
+TRAFFIC_GAIN = {
+    "green":  1.0,
+    "none":   1.0,
+    "yellow": 0.4,
+    "red":    0.0,
+}
 
 # ============================================================
 # Task selection + waypoints
@@ -163,6 +178,11 @@ class PuzzlebotMotionPD(Node):
         self.create_subscription(
             Float32, "/VelocityEncR", self._enc_r_cb, qos_profile_sensor_data)
 
+        # ---- Traffic light reaction ----
+        self._traffic_state = "none"
+        self.create_subscription(
+            String, "/traffic_light", self._on_traffic, 10)
+
         # ---- Wheel speed measurements (rad/s) ----
         self.wL = 0.0
         self.wR = 0.0
@@ -224,6 +244,19 @@ class PuzzlebotMotionPD(Node):
         self.wR = float(msg.data)
 
     # --------------------------------------------------------
+    # Traffic light callback
+    # --------------------------------------------------------
+    def _on_traffic(self, msg: String):
+        new_state = (msg.data or "none").strip().lower()
+        if new_state not in TRAFFIC_GAIN:
+            new_state = "none"
+        if new_state != self._traffic_state:
+            self.get_logger().info(
+                f"[traffic] {self._traffic_state.upper()} → {new_state.upper()}"
+            )
+            self._traffic_state = new_state
+
+    # --------------------------------------------------------
     # Odometry update (called each control tick)
     # --------------------------------------------------------
     def _update_odom(self, dt: float):
@@ -248,6 +281,12 @@ class PuzzlebotMotionPD(Node):
     def _cmd_unicycle(self, v: float, omega: float):
         v = clamp(v, -V_MAX, V_MAX)
         omega = clamp(omega, -OMEGA_MAX, OMEGA_MAX)
+        # Traffic light gating: scale both v and omega so a red light
+        # is a real stop and yellow is a smooth slowdown without
+        # changing the controller's intent.
+        gain = TRAFFIC_GAIN.get(self._traffic_state, 1.0)
+        v *= gain
+        omega *= gain
         wL, wR = unicycle_to_wheels(FORWARD_SIGN * v, omega)
         self._publish_wheels(wL, wR)
 
