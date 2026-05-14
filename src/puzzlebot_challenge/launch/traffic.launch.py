@@ -23,7 +23,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('puzzlebot_challenge')
-    default_config = os.path.join(pkg_share, 'config', 'traffic_light.yaml')
+    default_config = os.path.join(pkg_share, 'config', 'traffic_hsv.yaml')
 
     method_arg = DeclareLaunchArgument(
         'method', default_value='circles',
@@ -47,13 +47,13 @@ def generate_launch_description():
     is_circles = IfCondition(PythonExpression(["'", method, "' == 'circles'"]))
 
     hsv_node = Node(
-        package='puzzlebot_challenge', executable='traffic_controller_hsv',
+        package='puzzlebot_challenge', executable='traffic_detector_hsv',
         name='traffic_light_detector', output='screen',
         parameters=[config, {'debug': debug}],
         condition=is_hsv,
     )
     circles_node = Node(
-        package='puzzlebot_challenge', executable='traffic_controller_circle',
+        package='puzzlebot_challenge', executable='traffic_detector_circles',
         name='traffic_light_detector', output='screen',
         parameters=[config, {'debug': debug}],
         condition=is_circles,
