@@ -29,7 +29,8 @@ setup(
             'pid_controller   = puzzlebot_challenge.pid_controller:main',
             'pid_tuner        = puzzlebot_challenge.pid_tuner:main',
             'hsv_calibrator   = puzzlebot_challenge.hsv_calibrator:main',
-            'traffic_detector = puzzlebot_challenge.traffic_controller:main',
+            'traffic_detector_hsv = puzzlebot_challenge.traffic_controller_hsv:main',
+            'traffic_detector_circle = puzzlebot_challenge.traffic_controller_circle:main',
         ],
     },
 )
