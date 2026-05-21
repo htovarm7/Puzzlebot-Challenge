@@ -29,10 +29,10 @@ DEFAULTS = {
     "T_init":       185,
     "T_min":        127,
     "T_max":        222,
-    "dark_min_x10": 20,
-    "dark_max_x10": 24,
-    "roi_top_x100": 68,
-    "min_area":     3753,
+    "dark_min_x10": 10,   # 1.0 %
+    "dark_max_x10": 60,   # 6.0 %
+    "roi_top_x100": 60,   # 60 %
+    "min_area":     300,
     "blur":         21,
     "morph":        9,
     "turn_angle":   36,
@@ -190,7 +190,16 @@ def detect(frame, p):
 
     angle = shift = None
     if contours:
-        line = max(contours, key=cv.contourArea)
+        # Keep top-3 largest, then pick the median by X → always the center line
+        contours = sorted(contours, key=cv.contourArea, reverse=True)[:3]
+
+        def _cx(c):
+            m = cv.moments(c)
+            return int(m["m10"] / m["m00"]) if m["m00"] else 0
+
+        contours.sort(key=_cx)
+        line = contours[len(contours) // 2]
+
         rect = cv.minAreaRect(line)
         (cx, cy), _, _ = rect
         box = cv.boxPoints(rect)
