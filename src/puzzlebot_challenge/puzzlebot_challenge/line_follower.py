@@ -10,7 +10,7 @@ FORWARD_SIGN = -1
 KP = 0.8   
 KD = 0.08 
 
-V_BASE    = 0.12   # m/s cruise speed
+V_BASE    = 0.6   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed (never stop mid-line)
 OMEGA_MAX = 2.0    # rad/s saturation
 
