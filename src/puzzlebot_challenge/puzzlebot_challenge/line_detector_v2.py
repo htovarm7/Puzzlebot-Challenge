@@ -31,16 +31,21 @@ class CenterLineDetector:
         self.min_h_box     = 5       # minimum bounding-box height in pixels
         self.otsu_thresh   = 0       # last computed Otsu T (for HUD)
         self.debug_mask    = None
+        self.last_valid    = []      # all valid contour centroids from last frame
 
     def detect(self, image: np.ndarray):
         """
         Returns (cx, cy, detected).
         cx/cy are in full-frame coordinates.
+
+        Strategy: the track has three parallel lines (left-border, center, right-border).
+        Sort all valid contours by their X centroid and pick the MEDIAN one — it will
+        always be the center line regardless of how many are visible.
         """
         h, w = image.shape[:2]
         y_start = int(h * self.roi_top_frac)
 
-        roi  = image[y_start:h, 0:w]          # full width, lower portion
+        roi  = image[y_start:h, 0:w]
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (7, 7), 2.0)
 
@@ -50,9 +55,9 @@ class CenterLineDetector:
             cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Open removes speckle noise; Close reconnects tape segments
+        # Smaller close kernel so adjacent lines are NOT merged into one blob
         k_open  = np.ones((3, 3), np.uint8)
-        k_close = np.ones((11, 11), np.uint8)
+        k_close = np.ones((7, 7), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k_open)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_close)
         self.debug_mask = mask
@@ -73,35 +78,36 @@ class CenterLineDetector:
             if m["m00"] == 0:
                 continue
             cx = int(m["m10"] / m["m00"])
-            cy = int(m["m01"] / m["m00"]) + y_start  # to full-frame coords
+            cy = int(m["m01"] / m["m00"]) + y_start
             valid.append((cx, cy, area))
 
         if not valid:
             self.frames_since_detect += 1
             return self.last_center[0], self.last_center[1], False
 
-        # Jump filter only when actively tracking (avoids blocking at startup)
-        tracking = self.frames_since_detect < 5
-        cx_screen = w / 2.0
+        # Sort all candidates by X position (left → right)
+        valid.sort(key=lambda t: t[0])
+        self.last_valid = valid  # expose for debug rendering
 
-        best       = None
-        best_score = float("inf")
+        if len(valid) >= 3:
+            # 3 lines visible: left-border, CENTER, right-border → take median
+            mid = len(valid) // 2
+            best = (valid[mid][0], valid[mid][1])
+        else:
+            # Fewer lines visible: pick the one closest to last known center
+            best_item = min(valid, key=lambda t:
+                (t[0] - self.last_center[0]) ** 2 + (t[1] - self.last_center[1]) ** 2)
+            best = (best_item[0], best_item[1])
 
-        for cx, cy, area in valid:
-            dist_last   = ((cx - self.last_center[0]) ** 2 +
-                           (cy - self.last_center[1]) ** 2) ** 0.5
-            if tracking and dist_last > self.max_jump_px:
-                continue
-            dist_center = abs(cx - cx_screen)
-            score = dist_center * 0.3 + dist_last * 0.7
-            if score < best_score:
-                best_score = score
-                best = (cx, cy)
-
-        # Fallback: jump filter blocked everything → pick largest contour
-        if best is None:
-            valid.sort(key=lambda t: t[2], reverse=True)
-            best = (valid[0][0], valid[0][1])
+        # Jump filter: if actively tracking and jump is too large, fall back to
+        # the candidate closest to last center (avoids latching onto a border line)
+        if self.frames_since_detect < 5:
+            dist_jump = ((best[0] - self.last_center[0]) ** 2 +
+                         (best[1] - self.last_center[1]) ** 2) ** 0.5
+            if dist_jump > self.max_jump_px:
+                best_item = min(valid, key=lambda t:
+                    (t[0] - self.last_center[0]) ** 2 + (t[1] - self.last_center[1]) ** 2)
+                best = (best_item[0], best_item[1])
 
         self.last_center = best
         self.frames_since_detect = 0
@@ -172,11 +178,16 @@ class LineDetectorV2Node(Node):
         cv2.line(vis, (w // 2, y_start), (w // 2, h), (255, 255, 0), 1)
 
         if detected:
-            # Line from center to detected point
+            # Draw ALL candidate centroids as small gray circles for visibility
+            for i, (vx, vy, _) in enumerate(self._detector.last_valid):
+                cv2.circle(vis, (vx, vy), 5, (160, 160, 160), -1)
+                cv2.putText(vis, str(i), (vx + 6, vy - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+            # Selected (center) contour
             cv2.line(vis, (w // 2, cy), (cx, cy), (0, 0, 255), 2)
-            # Detected centroid
             cv2.circle(vis, (cx, cy), 8, (0, 255, 0), -1)
-            hud   = f"T={T}  shift={shift:+.0f}"
+            n = len(self._detector.last_valid)
+            hud   = f"T={T}  shift={shift:+.0f}  n={n}"
             color = (255, 255, 255)
         else:
             hud   = f"T={T}  no contour"
