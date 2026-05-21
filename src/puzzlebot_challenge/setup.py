@@ -30,6 +30,7 @@ setup(
             'pid_tuner        = puzzlebot_challenge.pid_tuner:main',
             'hsv_calibrator   = puzzlebot_challenge.hsv_calibrator:main',
             'traffic_detector = puzzlebot_challenge.traffic_controller:main',
+            'line_detector    = puzzlebot_challenge.line_detector:main',
         ],
     },
 )
