@@ -13,7 +13,8 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config'),  glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'models'), glob('utils/*.pt')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -37,6 +38,7 @@ setup(
             'teleop           = puzzlebot_challenge.teleop:main',
             'motor_watchdog   = puzzlebot_challenge.motor_watchdog:main',
             'line_viewer      = puzzlebot_challenge.line_viewer:main',
+            'sign_detector    = puzzlebot_challenge.sign_detector:main',
         ],
     },
 )

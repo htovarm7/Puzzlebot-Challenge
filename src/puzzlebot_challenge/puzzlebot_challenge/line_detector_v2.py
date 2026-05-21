@@ -14,7 +14,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Bool, Int32
 from cv_bridge import CvBridge
 
 
@@ -132,12 +132,13 @@ class LineDetectorV2Node(Node):
         self._bridge   = CvBridge()
         self._detector = None  # lazy-init on first frame (learns resolution)
 
-        self.sub_img      = self.create_subscription(
+        self.sub_img       = self.create_subscription(
             Image, image_topic, self._on_image, 10)
-        self.pub_shift    = self.create_publisher(Float32, "/line/shift",    10)
-        self.pub_angle    = self.create_publisher(Float32, "/line/angle",    10)
-        self.pub_detected = self.create_publisher(Bool,    "/line/detected", 10)
-        self.pub_debug    = self.create_publisher(Image,   "/vision/line",   10)
+        self.pub_shift     = self.create_publisher(Float32, "/line/shift",       10)
+        self.pub_angle     = self.create_publisher(Float32, "/line/angle",       10)
+        self.pub_detected  = self.create_publisher(Bool,    "/line/detected",    10)
+        self.pub_lost      = self.create_publisher(Int32,   "/line/lost_frames", 10)
+        self.pub_debug     = self.create_publisher(Image,   "/vision/line",      10)
 
         self.get_logger().info(
             f"LineDetectorV2Node ready | topic={image_topic}")
@@ -157,14 +158,17 @@ class LineDetectorV2Node(Node):
 
         cx, cy, detected = self._detector.detect(frame)
         shift = float(cx - w / 2.0)
+        lost  = int(self._detector.frames_since_detect)
 
         s_msg = Float32(); s_msg.data = shift
         a_msg = Float32(); a_msg.data = 90.0
         d_msg = Bool();    d_msg.data = detected
+        l_msg = Int32();   l_msg.data = lost
 
         self.pub_shift.publish(s_msg)
         self.pub_angle.publish(a_msg)
         self.pub_detected.publish(d_msg)
+        self.pub_lost.publish(l_msg)
 
         self._publish_debug(frame, cx, cy, detected, shift)
 
