@@ -10,7 +10,7 @@ FORWARD_SIGN = -1
 KP = 0.01   
 KD = 0.0 
 
-V_BASE    = 0.6   # m/s cruise speed
+V_BASE    = 0.3   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed (never stop mid-line)
 OMEGA_MAX = 2.0    # rad/s saturation
 
@@ -49,8 +49,8 @@ class LineFollowerNode(Node):
         self.create_subscription(Float32, "/line/shift",    self._cb_shift,    10)
         self.create_subscription(Bool,    "/line/detected", self._cb_detected, 10)
 
-        self.pub_l = self.create_publisher(Float32, "/cmd/VelocitySetL", 10)
-        self.pub_r = self.create_publisher(Float32, "/cmd/VelocitySetR", 10)
+        self.pub_l = self.create_publisher(Float32, "VelocitySetL", 10)
+        self.pub_r = self.create_publisher(Float32, "VelocitySetR", 10)
 
         self._shift       = 0.0
         self._detected    = False
