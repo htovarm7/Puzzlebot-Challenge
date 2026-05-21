@@ -5,6 +5,7 @@ Cada tecla envía un pulso de movimiento por PULSE_DURATION segundos y luego par
 """
 
 import sys
+import time
 import tty
 import termios
 import threading
@@ -135,8 +136,11 @@ def main():
     except KeyboardInterrupt:
         print('\nInterrumpido.')
     finally:
-        node.stop()
+        # Restaurar terminal primero — pase lo que pase, la shell no queda rota
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+        node.stop()
+        # Esperar a que el mensaje llegue al watchdog antes de bajar ROS
+        time.sleep(0.3)
         node.destroy_node()
         rclpy.shutdown()
 

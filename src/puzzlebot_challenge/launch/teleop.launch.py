@@ -10,6 +10,5 @@ def generate_launch_description():
             name='puzzlebot_teleop',
             output='screen',
             emulate_tty=True,
-            prefix='xterm -e',
         ),
     ])
