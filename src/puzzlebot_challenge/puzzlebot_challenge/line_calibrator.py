@@ -12,7 +12,7 @@ Keys:
   r       reset trackbars to defaults
   space   pause / unpause (no effect in live mode — frames always flow)
 """
-
+from __future__ import annotations
 import cv2 as cv    
 import numpy as np
 import sys
