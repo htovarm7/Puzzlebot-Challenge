@@ -7,17 +7,18 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.006
-KI = 0.0002
-KD = 0.003
+KP = 0.004
+KI = 0.0001
+KD = 0.010
 
 V_BASE    = 0.12
 V_MIN     = 0.04
-OMEGA_MAX = 1.8
+OMEGA_MAX = 1.2
 
-SHIFT_SCALE  = 160.0
-LOST_TIMEOUT = 0.5
-CTRL_DT      = 0.05
+SHIFT_SCALE     = 160.0
+LOST_TIMEOUT    = 0.5
+CTRL_DT         = 0.05
+DERIV_ALPHA     = 0.3   # low-pass filter on derivative (0=frozen, 1=raw)
 
 
 def clamp(x, lo, hi):
@@ -43,6 +44,7 @@ class LineFollowerNode(Node):
         self.declare_parameter("omega_max",    OMEGA_MAX)
         self.declare_parameter("shift_scale",  SHIFT_SCALE)
         self.declare_parameter("lost_timeout", LOST_TIMEOUT)
+        self.declare_parameter("deriv_alpha",  DERIV_ALPHA)
 
         self.create_subscription(Float32, "/line/shift",    self._cb_shift,    10)
         self.create_subscription(Float32, "/line/angle",    self._cb_angle,    10)
@@ -56,9 +58,10 @@ class LineFollowerNode(Node):
         self._detected = False
         self._last_seen_t = self.get_clock().now().nanoseconds / 1e9
 
-        self._integral = 0.0
-        self._prev_err = 0.0
-        self._last_t   = self.get_clock().now().nanoseconds / 1e9
+        self._integral    = 0.0
+        self._prev_err    = 0.0
+        self._filtered_d  = 0.0   # low-pass filtered derivative
+        self._last_t      = self.get_clock().now().nanoseconds / 1e9
 
         self.create_timer(CTRL_DT, self._control_loop)
 
@@ -106,8 +109,9 @@ class LineFollowerNode(Node):
         v0   = self.get_parameter("v_base").value
         vmin = self.get_parameter("v_min").value
         omax = self.get_parameter("omega_max").value
-        sscl = self.get_parameter("shift_scale").value
-        tout = self.get_parameter("lost_timeout").value
+        sscl  = self.get_parameter("shift_scale").value
+        tout  = self.get_parameter("lost_timeout").value
+        alpha = self.get_parameter("deriv_alpha").value
 
         if not self._detected and (now - self._last_seen_t > tout):
             self._integral = 0.0
@@ -120,10 +124,11 @@ class LineFollowerNode(Node):
 
         err = self._shift
         self._integral = clamp(self._integral + err * dt, -200.0, 200.0)
-        derivative     = (err - self._prev_err) / dt
+        raw_d = (err - self._prev_err) / dt
+        self._filtered_d = alpha * raw_d + (1.0 - alpha) * self._filtered_d
         self._prev_err = err
 
-        omega = -(kp * err + ki * self._integral + kd * derivative)
+        omega = -(kp * err + ki * self._integral + kd * self._filtered_d)
         omega = clamp(omega, -omax, omax)
 
         v = v0 * (1.0 - min(1.0, abs(err) / sscl))
