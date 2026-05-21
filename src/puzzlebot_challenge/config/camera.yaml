@@ -12,7 +12,7 @@ picam_publisher:
 
 cam_server:
   ros__parameters:
-    topic: /camera/image_raw
+    topic: /vision/line
     host: 0.0.0.0
     port: 8080
     jpeg_quality: 75
