@@ -8,8 +8,8 @@ WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
 # PD gains  (error is normalised to [-1, 1] so gains are resolution-independent)
-KP = 1.2    # proportional — how hard to steer NOW
-KD = 0.35   # derivative   — how hard to steer based on HOW FAST error is growing
+KP = 0.01   # proportional — how hard to steer NOW
+KD = 0.10   # derivative   — how hard to steer based on HOW FAST error is growing
 
 V_BASE    = 0.12   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed (never stop mid-line)
