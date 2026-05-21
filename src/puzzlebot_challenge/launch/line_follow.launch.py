@@ -2,11 +2,11 @@
 line_follow.launch.py
 =====================
 Stack completo de seguimiento de línea:
-  1. picam_publisher   – driver cámara CSI
-  2. line_detector     – visión: publica /line/shift, /line/angle, /line/detected, /vision/line
-  3. line_follower     – PID: suscribe /line/* → publica /cmd/VelocitySet{L,R}
-  4. motor_watchdog    – seguridad: /cmd/VelocitySet* → /VelocitySet{L,R}, para motores si no llegan comandos
-  5. line_viewer       – ventana de debug (requiere display o ssh -X)
+  1. picam_publisher    – driver cámara CSI
+  2. line_detector_v2   – visión v2: publica /line/shift, /line/angle, /line/detected, /vision/line
+  3. line_follower      – PID: suscribe /line/* → publica /cmd/VelocitySet{L,R}
+  4. motor_watchdog     – seguridad: /cmd/VelocitySet* → /VelocitySet{L,R}, para motores si no llegan comandos
+  5. line_viewer        – ventana de debug (requiere display o ssh -X)
 """
 
 import os
@@ -20,7 +20,6 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_share = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
-    line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
 
     kp_arg    = DeclareLaunchArgument('kp',     default_value='0.006',  description='PID P gain')
     ki_arg    = DeclareLaunchArgument('ki',     default_value='0.0002', description='PID I gain')
@@ -41,9 +40,8 @@ def generate_launch_description():
 
         Node(
             package='puzzlebot_challenge',
-            executable='line_detector',
-            name='line_detector',
-            parameters=[{'params_config': line_cfg}],
+            executable='line_detector_v2',
+            name='line_detector_v2',
             output='screen',
         ),
 

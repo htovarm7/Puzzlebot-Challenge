@@ -31,6 +31,7 @@ setup(
             'hsv_calibrator   = puzzlebot_challenge.hsv_calibrator:main',
             'traffic_detector = puzzlebot_challenge.traffic_controller:main',
             'line_detector    = puzzlebot_challenge.line_detector:main',
+            'line_detector_v2 = puzzlebot_challenge.line_detector_v2:main',
             'line_calibrator  = puzzlebot_challenge.line_calibrator:main',
             'line_follower    = puzzlebot_challenge.line_follower:main',
             'teleop           = puzzlebot_challenge.teleop:main',
