@@ -19,7 +19,7 @@ class CamServer(Node):
     def __init__(self):
         super().__init__('cam_server')
 
-        self.declare_parameter('topic', '/camera/image_raw')
+        self.declare_parameter('topic', '/vision/line')
         self.declare_parameter('host', '0.0.0.0')
         self.declare_parameter('port', 8080)
         self.declare_parameter('jpeg_quality', 75)
