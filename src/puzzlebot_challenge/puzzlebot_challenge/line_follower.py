@@ -48,8 +48,8 @@ class LineFollowerNode(Node):
         self.create_subscription(Float32, "/line/angle",    self._cb_angle,    10)
         self.create_subscription(Bool,    "/line/detected", self._cb_detected, 10)
 
-        self.pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
-        self.pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
+        self.pub_l = self.create_publisher(Float32, "/cmd/VelocitySetL", 10)
+        self.pub_r = self.create_publisher(Float32, "/cmd/VelocitySetR", 10)
 
         self._shift    = 0.0
         self._angle    = 90.0

@@ -1,10 +1,12 @@
 """
 line_follow.launch.py
 =====================
-Launches the full line-following stack:
-  1. picam_publisher   – CSI camera driver
-  2. line_detector     – vision: publishes /line/shift, /line/angle, /line/detected
-  3. line_follower     – PID control: subscribes to /line/* → drives /VelocitySet{L,R}
+Stack completo de seguimiento de línea:
+  1. picam_publisher   – driver cámara CSI
+  2. line_detector     – visión: publica /line/shift, /line/angle, /line/detected, /vision/line
+  3. line_follower     – PID: suscribe /line/* → publica /cmd/VelocitySet{L,R}
+  4. motor_watchdog    – seguridad: /cmd/VelocitySet* → /VelocitySet{L,R}, para motores si no llegan comandos
+  5. line_viewer       – ventana de debug (requiere display o ssh -X)
 """
 
 import os
@@ -20,11 +22,11 @@ def generate_launch_description():
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
 
-    kp_arg    = DeclareLaunchArgument('kp',          default_value='0.006',  description='PID P gain')
-    ki_arg    = DeclareLaunchArgument('ki',          default_value='0.0002', description='PID I gain')
-    kd_arg    = DeclareLaunchArgument('kd',          default_value='0.003',  description='PID D gain')
-    vbase_arg = DeclareLaunchArgument('v_base',      default_value='0.12',   description='Base forward speed [m/s]')
-    vmin_arg  = DeclareLaunchArgument('v_min',       default_value='0.04',   description='Min forward speed [m/s]')
+    kp_arg    = DeclareLaunchArgument('kp',     default_value='0.006',  description='PID P gain')
+    ki_arg    = DeclareLaunchArgument('ki',     default_value='0.0002', description='PID I gain')
+    kd_arg    = DeclareLaunchArgument('kd',     default_value='0.003',  description='PID D gain')
+    vbase_arg = DeclareLaunchArgument('v_base', default_value='0.12',   description='Velocidad base [m/s]')
+    vmin_arg  = DeclareLaunchArgument('v_min',  default_value='0.04',   description='Velocidad mínima [m/s]')
 
     return LaunchDescription([
         kp_arg, ki_arg, kd_arg, vbase_arg, vmin_arg,
@@ -56,6 +58,22 @@ def generate_launch_description():
                 'v_base': LaunchConfiguration('v_base'),
                 'v_min':  LaunchConfiguration('v_min'),
             }],
+            output='screen',
+        ),
+
+        # Watchdog de seguridad: para motores si line_follower muere
+        Node(
+            package='puzzlebot_challenge',
+            executable='motor_watchdog',
+            name='motor_watchdog',
+            output='screen',
+        ),
+
+        # Ventana de debug de visión (requiere DISPLAY — usar ssh -X)
+        Node(
+            package='puzzlebot_challenge',
+            executable='line_viewer',
+            name='line_viewer',
             output='screen',
         ),
     ])

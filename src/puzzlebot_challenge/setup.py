@@ -34,6 +34,8 @@ setup(
             'line_calibrator  = puzzlebot_challenge.line_calibrator:main',
             'line_follower    = puzzlebot_challenge.line_follower:main',
             'teleop           = puzzlebot_challenge.teleop:main',
+            'motor_watchdog   = puzzlebot_challenge.motor_watchdog:main',
+            'line_viewer      = puzzlebot_challenge.line_viewer:main',
         ],
     },
 )
