@@ -32,6 +32,7 @@ setup(
             'traffic_detector = puzzlebot_challenge.traffic_controller:main',
             'line_detector    = puzzlebot_challenge.line_detector:main',
             'line_calibrator  = puzzlebot_challenge.line_calibrator:main',
+            'line_follower    = puzzlebot_challenge.line_follower:main',
         ],
     },
 )
