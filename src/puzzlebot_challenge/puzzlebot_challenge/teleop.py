@@ -69,8 +69,8 @@ def diff_drive(v: float, omega: float):
 class TeleopNode(Node):
     def __init__(self):
         super().__init__('puzzlebot_teleop')
-        self._pub_l = self.create_publisher(Float32, '/cmd/VelocitySetL', 10)
-        self._pub_r = self.create_publisher(Float32, '/cmd/VelocitySetR', 10)
+        self._pub_l = self.create_publisher(Float32, '/VelocitySetL', 10)
+        self._pub_r = self.create_publisher(Float32, '/VelocitySetR', 10)
         self._stop_timer = None
         self._lock = threading.Lock()
 
