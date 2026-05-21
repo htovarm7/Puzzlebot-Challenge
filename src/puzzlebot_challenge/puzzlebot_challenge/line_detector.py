@@ -27,15 +27,16 @@ from std_msgs.msg import Float32, Bool
 from cv_bridge import CvBridge
 
 _DEFAULT_PARAMS = {
-    "T_init":   185,
-    "T_min":    127,
-    "T_max":    222,
-    "dark_min": 2.0,     
-    "dark_max": 2.4,     
-    "roi_top":  0.68,    
-    "min_area": 3753,    
-    "blur":     21,      
-    "morph":    9,
+    "T_init":      185,
+    "T_min":       127,
+    "T_max":       222,
+    "dark_min":    1.0,  
+    "dark_max":    6.0,
+    "roi_top":     0.60,  
+    "min_area":    300,   
+    "blur":        21,
+    "morph":       9,
+    "n_track_lines": 3, 
 }
 
 
@@ -151,7 +152,19 @@ class LineDetection:
         if not contours:
             return out
 
-        line = max(contours, key=cv2.contourArea)
+        # Keep only the N largest blobs — floor artifacts are always smaller than tape
+        n_lines = int(p.get("n_track_lines", 3))
+        if len(contours) > n_lines:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:n_lines]
+
+        # Sort by horizontal centroid and pick the MEDIAN → always the center line
+        def _cx(c):
+            m = cv2.moments(c)
+            return int(m["m10"] / m["m00"]) if m["m00"] else 0
+
+        contours.sort(key=_cx)
+        line = contours[len(contours) // 2]
+
         rect = cv2.minAreaRect(line)
         (cx, _cy), _, _ = rect
         box = cv2.boxPoints(rect)
@@ -199,7 +212,8 @@ class LineDetectorNode(Node):
 
         for k, v in _DEFAULT_PARAMS.items():
             self.declare_parameter(
-                k, v, ParameterDescriptor(description=f"Param de visión: {k}"))
+                k, float(v) if isinstance(v, float) else v,
+                ParameterDescriptor(description=f"Param de visión: {k}"))
 
         yaml_path = self.get_parameter("params_config").value
         yaml_params = _load_params_yaml(yaml_path)
