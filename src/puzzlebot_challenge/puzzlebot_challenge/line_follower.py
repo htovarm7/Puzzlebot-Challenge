@@ -96,7 +96,6 @@ class LineFollowerNode(Node):
         kp    = self.get_parameter("kp").value
         kd    = self.get_parameter("kd").value
         v0    = self.get_parameter("v_base").value
-        vmin  = self.get_parameter("v_min").value
         omax  = self.get_parameter("omega_max").value
         sscl  = self.get_parameter("shift_scale").value
         db    = self.get_parameter("deadband").value
@@ -130,13 +129,7 @@ class LineFollowerNode(Node):
         omega = -(kp * err + kd * self._filtered_d)
         omega = clamp(omega, -omax, omax)
 
-        # Adaptive speed: slow down proportionally to |err| AND |d_err|
-        # — |err|  slows the robot when it's already off-centre
-        # — |d_err| slows it DOWN EARLY when the error is GROWING (anticipates curves)
-        curve_load = clamp(abs(err) + 0.4 * abs(self._filtered_d), 0.0, 1.0)
-        v = max(vmin, v0 * (1.0 - curve_load))
-
-        vl, vr = unicycle_to_wheels(FORWARD_SIGN * v, omega)
+        vl, vr = unicycle_to_wheels(FORWARD_SIGN * v0, FORWARD_SIGN * omega)
         self._publish_wheels(vl, vr)
 
 
