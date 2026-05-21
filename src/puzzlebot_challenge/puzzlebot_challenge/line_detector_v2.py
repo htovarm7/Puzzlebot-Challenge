@@ -29,6 +29,7 @@ class CenterLineDetector:
         self.max_jump_px   = 120     # max allowed jump when actively tracking
         self.min_area      = 100     # minimum contour area in pixels
         self.min_h_box     = 5       # minimum bounding-box height in pixels
+        self.n_track_lines = 3       # expected number of tape lines on the track
         self.otsu_thresh   = 0       # last computed Otsu T (for HUD)
         self.debug_mask    = None
         self.last_valid    = []      # all valid contour centroids from last frame
@@ -85,7 +86,13 @@ class CenterLineDetector:
             self.frames_since_detect += 1
             return self.last_center[0], self.last_center[1], False
 
-        # Sort all candidates by X position (left → right)
+        # Keep only the N largest contours by area — paper edges and floor artifacts
+        # will always be smaller than the actual tape lines.
+        if len(valid) > self.n_track_lines:
+            valid.sort(key=lambda t: t[2], reverse=True)
+            valid = valid[:self.n_track_lines]
+
+        # Sort by X position (left → right) for median selection
         valid.sort(key=lambda t: t[0])
         self.last_valid = valid  # expose for debug rendering
 
