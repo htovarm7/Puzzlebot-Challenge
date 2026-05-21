@@ -7,18 +7,18 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-# PD gains  (error is normalised to [-1, 1] so gains are resolution-independent)
-KP = 0.01   # proportional — how hard to steer NOW
-KD = 0.10   # derivative   — how hard to steer based on HOW FAST error is growing
+KP = 0.8   
+KD = 0.08 
 
 V_BASE    = 0.12   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed (never stop mid-line)
 OMEGA_MAX = 2.0    # rad/s saturation
 
-SHIFT_SCALE  = 160.0   # pixels that map to ±1 normalised error (half frame width)
-LOST_TIMEOUT = 0.5     # seconds without detection before stopping
-CTRL_DT      = 0.05    # control loop period (20 Hz)
-DERIV_ALPHA  = 0.45    # derivative low-pass: 0=frozen  1=raw  (0.45 = light filter)
+SHIFT_SCALE  = 160.0  # pixels that map to ±1 normalised error (half frame width)
+DEADBAND     = 0.06   # normalised units — ignore tiny errors (~10 px) to avoid straight-line oscillation
+LOST_TIMEOUT = 0.5    # seconds without detection before stopping
+CTRL_DT      = 0.05   # control loop period (20 Hz)
+DERIV_ALPHA  = 0.15   # derivative low-pass: smaller = more smoothing (reduces oscillation)
 
 
 def clamp(x, lo, hi):
@@ -42,6 +42,7 @@ class LineFollowerNode(Node):
         self.declare_parameter("v_min",        V_MIN)
         self.declare_parameter("omega_max",    OMEGA_MAX)
         self.declare_parameter("shift_scale",  SHIFT_SCALE)
+        self.declare_parameter("deadband",     DEADBAND)
         self.declare_parameter("lost_timeout", LOST_TIMEOUT)
         self.declare_parameter("deriv_alpha",  DERIV_ALPHA)
 
@@ -98,6 +99,7 @@ class LineFollowerNode(Node):
         vmin  = self.get_parameter("v_min").value
         omax  = self.get_parameter("omega_max").value
         sscl  = self.get_parameter("shift_scale").value
+        db    = self.get_parameter("deadband").value
         tout  = self.get_parameter("lost_timeout").value
         alpha = self.get_parameter("deriv_alpha").value
 
@@ -114,6 +116,10 @@ class LineFollowerNode(Node):
 
         # Normalise error to [-1, 1]  (+1 = line is all the way to the right)
         err = self._shift / sscl
+
+        # Deadband: zero out tiny errors so the robot doesn't wiggle on straight sections
+        if abs(err) < db:
+            err = 0.0
 
         # Derivative: low-pass filtered  (suppresses encoder/detection noise)
         raw_d = (err - self._prev_err) / dt
