@@ -4,7 +4,7 @@ teleop.py  —  PuzzleBot WASD teleop (modo pulso)
 Cada tecla envía un pulso de movimiento por PULSE_DURATION segundos y luego para.
 """
 
-import sys
+import os
 import time
 import tty
 import termios
@@ -53,10 +53,20 @@ KEY_LABELS = {
 }
 
 
+_tty_fd = None
+
+def _open_tty():
+    global _tty_fd
+    if _tty_fd is None:
+        _tty_fd = open('/dev/tty', 'rb', buffering=0)
+    return _tty_fd
+
+
 def get_key(settings):
-    tty.setraw(sys.stdin.fileno())
-    key = sys.stdin.read(1)
-    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    fd = _open_tty().fileno()
+    tty.setraw(fd)
+    key = os.read(fd, 1).decode('utf-8', errors='replace')
+    termios.tcsetattr(fd, termios.TCSADRAIN, settings)
     return key
 
 
@@ -115,7 +125,8 @@ def main():
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
-    settings = termios.tcgetattr(sys.stdin)
+    tty_fd = _open_tty().fileno()
+    settings = termios.tcgetattr(tty_fd)
     print(BANNER)
 
     try:
@@ -136,11 +147,14 @@ def main():
     except KeyboardInterrupt:
         print('\nInterrumpido.')
     finally:
-        # Restaurar terminal primero — pase lo que pase, la shell no queda rota
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-        node.stop()
-        # Esperar a que el mensaje llegue al watchdog antes de bajar ROS
-        time.sleep(0.3)
+        termios.tcsetattr(tty_fd, termios.TCSADRAIN, settings)
+        with node._lock:
+            if node._stop_timer is not None:
+                node._stop_timer.cancel()
+                node._stop_timer = None
+        for _ in range(10):
+            node.stop()
+            time.sleep(0.05)
         node.destroy_node()
         rclpy.shutdown()
 
