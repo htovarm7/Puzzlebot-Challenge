@@ -152,11 +152,13 @@ def main():
             if node._stop_timer is not None:
                 node._stop_timer.cancel()
                 node._stop_timer = None
+        # Publicar stop mientras spin sigue activo
         for _ in range(10):
             node.stop()
             time.sleep(0.05)
-        node.destroy_node()
+        # Bajar ROS limpiamente: shutdown hace que spin() retorne, luego join
         rclpy.shutdown()
+        spin_thread.join(timeout=2.0)
 
 
 if __name__ == '__main__':
