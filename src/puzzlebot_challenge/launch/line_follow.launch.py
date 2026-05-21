@@ -20,6 +20,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_share = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
+    line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
 
     kp_arg    = DeclareLaunchArgument('kp',     default_value='1.2',  description='PD P gain (normalised error)')
     kd_arg    = DeclareLaunchArgument('kd',     default_value='0.35', description='PD D gain (normalised error)')
@@ -41,6 +42,7 @@ def generate_launch_description():
             package='puzzlebot_challenge',
             executable='line_detector',
             name='line_detector',
+            parameters=[{'params_config': line_cfg}],
             output='screen',
         ),
 
