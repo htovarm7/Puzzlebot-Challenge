@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
 """
-teleop.py
-=========
-ROS2 node for teleoperation of the PuzzleBot via WASD keys in terminal.
-
-Controls
---------
-  W : move forward
-  S : move backward
-  A : turn left  (counter-clockwise)
-  D : turn right (clockwise)
-  Space / X : emergency stop (zero velocities)
-  Q : quit
-
-Topics
-------
-Publishers : /VelocitySetL  (std_msgs/Float32)  rad/s
-             /VelocitySetR  (std_msgs/Float32)  rad/s
-
-The robot uses differential drive:
-    wL = (v - omega * B/2) / R
-    wR = (v + omega * B/2) / R
-where R = wheel radius, B = wheel base.
+teleop.py  —  PuzzleBot WASD teleop (modo pulso)
+Cada tecla envía un pulso de movimiento por PULSE_DURATION segundos y luego para.
 """
 
 import sys
@@ -32,23 +12,22 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
 
-# ── Robot physical parameters (must match pid_controller.py) ─────────────────
-WHEEL_RADIUS  = 0.05154   # [m]
-WHEEL_BASE    = 0.19      # [m]
-FORWARD_SIGN  = -1        # -1 because chassis is mounted reversed
+WHEEL_RADIUS  = 0.05154
+WHEEL_BASE    = 0.19
+FORWARD_SIGN  = -1
 
-# ── Teleop speed settings ────────────────────────────────────────────────────
-LINEAR_SPEED  = 0.15      # [m/s]   forward / backward
-ANGULAR_SPEED = 0.8       # [rad/s] turning
+LINEAR_SPEED  = 0.15   # [m/s]
+ANGULAR_SPEED = 0.8    # [rad/s]
+PULSE_DURATION = 0.25  # [s] cuánto dura cada pulso de tecla
 
 BANNER = """
 ╔══════════════════════════════════╗
 ║   PuzzleBot WASD Teleop          ║
 ╠══════════════════════════════════╣
-║  W  →  Adelante                  ║
-║  S  →  Atrás                     ║
-║  A  →  Girar izquierda           ║
-║  D  →  Girar derecha             ║
+║  W  →  Adelante (pulso)          ║
+║  S  →  Atrás    (pulso)          ║
+║  A  →  Giro izquierda (pulso)    ║
+║  D  →  Giro derecha   (pulso)    ║
 ║  Space / X  →  Parar             ║
 ║  Q  →  Salir                     ║
 ╚══════════════════════════════════╝
@@ -63,6 +42,15 @@ KEY_BINDINGS = {
     'x': ( 0.0,           0.0),
 }
 
+KEY_LABELS = {
+    'w': 'Adelante',
+    's': 'Atrás',
+    'a': 'Giro izq.',
+    'd': 'Giro der.',
+    ' ': 'STOP',
+    'x': 'STOP',
+}
+
 
 def get_key(settings):
     tty.setraw(sys.stdin.fileno())
@@ -72,7 +60,6 @@ def get_key(settings):
 
 
 def diff_drive(v: float, omega: float):
-    """Convert (v, omega) → (wL, wR) in rad/s."""
     wL = FORWARD_SIGN * (v - omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
     wR = FORWARD_SIGN * (v + omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
     return wL, wR
@@ -83,25 +70,47 @@ class TeleopNode(Node):
         super().__init__('puzzlebot_teleop')
         self._pub_l = self.create_publisher(Float32, '/VelocitySetL', 10)
         self._pub_r = self.create_publisher(Float32, '/VelocitySetR', 10)
-        self.get_logger().info('Teleop node ready.')
+        self._stop_timer = None
+        self._lock = threading.Lock()
 
     def publish(self, v: float, omega: float):
         wL, wR = diff_drive(v, omega)
-        msg_l, msg_r = Float32(), Float32()
-        msg_l.data = float(wL)
-        msg_r.data = float(wR)
-        self._pub_l.publish(msg_l)
-        self._pub_r.publish(msg_r)
+        ml, mr = Float32(), Float32()
+        ml.data, mr.data = float(wL), float(wR)
+        self._pub_l.publish(ml)
+        self._pub_r.publish(mr)
 
     def stop(self):
-        self.publish(0.0, 0.0)
+        try:
+            self.publish(0.0, 0.0)
+        except Exception:
+            pass
+
+    def pulse(self, v: float, omega: float):
+        """Publica velocidad y programa un stop automático tras PULSE_DURATION."""
+        with self._lock:
+            # Cancela timer anterior si aún no disparó
+            if self._stop_timer is not None:
+                self._stop_timer.cancel()
+            self.publish(v, omega)
+            # Para movimientos de stop inmediato no ponemos timer
+            if v == 0.0 and omega == 0.0:
+                self._stop_timer = None
+                return
+            self._stop_timer = threading.Timer(PULSE_DURATION, self._timer_stop)
+            self._stop_timer.daemon = True
+            self._stop_timer.start()
+
+    def _timer_stop(self):
+        with self._lock:
+            self._stop_timer = None
+        self.stop()
 
 
 def main():
     rclpy.init()
     node = TeleopNode()
 
-    # Spin ROS in background so publishers stay alive
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
@@ -118,21 +127,13 @@ def main():
 
             if key in KEY_BINDINGS:
                 v, omega = KEY_BINDINGS[key]
-                node.publish(v, omega)
-                action = {
-                    'w': 'Adelante',
-                    's': 'Atrás',
-                    'a': 'Giro izq.',
-                    'd': 'Giro der.',
-                    ' ': 'STOP',
-                    'x': 'STOP',
-                }[key]
-                print(f'\r[{key.upper()}] {action} — v={v:.2f} m/s  ω={omega:.2f} rad/s    ', end='', flush=True)
+                node.pulse(v, omega)
+                print(f'\r[{key.upper()}] {KEY_LABELS[key]:<16}', end='', flush=True)
             else:
-                print(f'\r[?] Tecla desconocida: {repr(key)}    ', end='', flush=True)
+                print(f'\r[?] Tecla no reconocida: {repr(key)}    ', end='', flush=True)
 
     except KeyboardInterrupt:
-        print('\nInterrumpido por Ctrl+C')
+        print('\nInterrumpido.')
     finally:
         node.stop()
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)

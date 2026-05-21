@@ -84,7 +84,10 @@ class LineFollowerNode(Node):
         self.pub_r.publish(mr)
 
     def _stop(self):
-        self._publish_wheels(0.0, 0.0)
+        try:
+            self._publish_wheels(0.0, 0.0)
+        except Exception:
+            pass
 
     def _cmd_unicycle(self, v: float, omega: float):
         v     = clamp(v,     -V_BASE,    V_BASE)
@@ -135,9 +138,9 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().warn("Interrupted — stopping.")
-        node._stop()
+        pass
     finally:
+        node._stop()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
