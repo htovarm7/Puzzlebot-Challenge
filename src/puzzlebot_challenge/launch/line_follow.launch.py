@@ -39,8 +39,8 @@ def generate_launch_description():
 
         Node(
             package='puzzlebot_challenge',
-            executable='line_detector_v2',
-            name='line_detector_v2',
+            executable='line_detector',
+            name='line_detector',
             output='screen',
         ),
 
