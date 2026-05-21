@@ -21,14 +21,13 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
 
-    kp_arg    = DeclareLaunchArgument('kp',     default_value='0.006',  description='PID P gain')
-    ki_arg    = DeclareLaunchArgument('ki',     default_value='0.0002', description='PID I gain')
-    kd_arg    = DeclareLaunchArgument('kd',     default_value='0.003',  description='PID D gain')
-    vbase_arg = DeclareLaunchArgument('v_base', default_value='0.12',   description='Velocidad base [m/s]')
-    vmin_arg  = DeclareLaunchArgument('v_min',  default_value='0.04',   description='Velocidad mínima [m/s]')
+    kp_arg    = DeclareLaunchArgument('kp',     default_value='1.2',  description='PD P gain (normalised error)')
+    kd_arg    = DeclareLaunchArgument('kd',     default_value='0.35', description='PD D gain (normalised error)')
+    vbase_arg = DeclareLaunchArgument('v_base', default_value='0.12', description='Velocidad base [m/s]')
+    vmin_arg  = DeclareLaunchArgument('v_min',  default_value='0.04', description='Velocidad mínima [m/s]')
 
     return LaunchDescription([
-        kp_arg, ki_arg, kd_arg, vbase_arg, vmin_arg,
+        kp_arg, kd_arg, vbase_arg, vmin_arg,
 
         Node(
             package='puzzlebot_challenge',
@@ -51,7 +50,6 @@ def generate_launch_description():
             name='line_follower',
             parameters=[{
                 'kp':     LaunchConfiguration('kp'),
-                'ki':     LaunchConfiguration('ki'),
                 'kd':     LaunchConfiguration('kd'),
                 'v_base': LaunchConfiguration('v_base'),
                 'v_min':  LaunchConfiguration('v_min'),

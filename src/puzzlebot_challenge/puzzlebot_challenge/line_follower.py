@@ -7,18 +7,18 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.004
-KI = 0.0001
-KD = 0.010
+# PD gains  (error is normalised to [-1, 1] so gains are resolution-independent)
+KP = 1.2    # proportional — how hard to steer NOW
+KD = 0.35   # derivative   — how hard to steer based on HOW FAST error is growing
 
-V_BASE    = 0.12
-V_MIN     = 0.04
-OMEGA_MAX = 1.2
+V_BASE    = 0.12   # m/s cruise speed
+V_MIN     = 0.04   # m/s minimum speed (never stop mid-line)
+OMEGA_MAX = 2.0    # rad/s saturation
 
-SHIFT_SCALE     = 160.0
-LOST_TIMEOUT    = 0.5
-CTRL_DT         = 0.05
-DERIV_ALPHA     = 0.3   # low-pass filter on derivative (0=frozen, 1=raw)
+SHIFT_SCALE  = 160.0   # pixels that map to ±1 normalised error (half frame width)
+LOST_TIMEOUT = 0.5     # seconds without detection before stopping
+CTRL_DT      = 0.05    # control loop period (20 Hz)
+DERIV_ALPHA  = 0.45    # derivative low-pass: 0=frozen  1=raw  (0.45 = light filter)
 
 
 def clamp(x, lo, hi):
@@ -26,9 +26,9 @@ def clamp(x, lo, hi):
 
 
 def unicycle_to_wheels(v, omega):
-    v_l = (v - omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
-    v_r = (v + omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
-    return v_l, v_r
+    vl = (v - omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
+    vr = (v + omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
+    return vl, vr
 
 
 class LineFollowerNode(Node):
@@ -37,7 +37,6 @@ class LineFollowerNode(Node):
         super().__init__("line_follower")
 
         self.declare_parameter("kp",           KP)
-        self.declare_parameter("ki",           KI)
         self.declare_parameter("kd",           KD)
         self.declare_parameter("v_base",       V_BASE)
         self.declare_parameter("v_min",        V_MIN)
@@ -47,94 +46,92 @@ class LineFollowerNode(Node):
         self.declare_parameter("deriv_alpha",  DERIV_ALPHA)
 
         self.create_subscription(Float32, "/line/shift",    self._cb_shift,    10)
-        self.create_subscription(Float32, "/line/angle",    self._cb_angle,    10)
         self.create_subscription(Bool,    "/line/detected", self._cb_detected, 10)
 
         self.pub_l = self.create_publisher(Float32, "/cmd/VelocitySetL", 10)
         self.pub_r = self.create_publisher(Float32, "/cmd/VelocitySetR", 10)
 
-        self._shift    = 0.0
-        self._angle    = 90.0
-        self._detected = False
-        self._last_seen_t = self.get_clock().now().nanoseconds / 1e9
+        self._shift       = 0.0
+        self._detected    = False
+        self._last_seen_t = self._now()
 
-        self._integral    = 0.0
-        self._prev_err    = 0.0
-        self._filtered_d  = 0.0   # low-pass filtered derivative
-        self._last_t      = self.get_clock().now().nanoseconds / 1e9
+        self._prev_err   = 0.0   # previous normalised error
+        self._filtered_d = 0.0   # low-pass filtered derivative
+
+        self._last_t = self._now()
 
         self.create_timer(CTRL_DT, self._control_loop)
 
         self.get_logger().info(
-            f"LineFollowerNode ready  Kp={KP} Ki={KI} Kd={KD}  v_base={V_BASE} m/s"
-        )
+            f"LineFollower (PD) ready  Kp={KP}  Kd={KD}  v_base={V_BASE} m/s")
+
+    # ------------------------------------------------------------------
+    def _now(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
 
     def _cb_shift(self, msg: Float32):
         self._shift = float(msg.data)
 
-    def _cb_angle(self, msg: Float32):
-        self._angle = float(msg.data)
-
     def _cb_detected(self, msg: Bool):
         self._detected = bool(msg.data)
         if self._detected:
-            self._last_seen_t = self.get_clock().now().nanoseconds / 1e9
+            self._last_seen_t = self._now()
 
-    def _publish_wheels(self, wL: float, wR: float):
+    def _publish_wheels(self, wl: float, wr: float):
         ml, mr = Float32(), Float32()
-        ml.data, mr.data = float(wL), float(wR)
+        ml.data, mr.data = float(wl), float(wr)
         self.pub_l.publish(ml)
         self.pub_r.publish(mr)
 
     def _stop(self):
-        try:
-            self._publish_wheels(0.0, 0.0)
-        except Exception:
-            pass
+        self._publish_wheels(0.0, 0.0)
 
-    def _cmd_unicycle(self, v: float, omega: float):
-        v     = clamp(v,     -V_BASE,    V_BASE)
-        omega = clamp(omega, -OMEGA_MAX, OMEGA_MAX)
-        wL, wR = unicycle_to_wheels(FORWARD_SIGN * v, omega)
-        self._publish_wheels(wL, wR)
-
+    # ------------------------------------------------------------------
     def _control_loop(self):
-        now = self.get_clock().now().nanoseconds / 1e9
+        now = self._now()
         dt  = max(1e-3, now - self._last_t)
         self._last_t = now
 
-        kp   = self.get_parameter("kp").value
-        ki   = self.get_parameter("ki").value
-        kd   = self.get_parameter("kd").value
-        v0   = self.get_parameter("v_base").value
-        vmin = self.get_parameter("v_min").value
-        omax = self.get_parameter("omega_max").value
+        kp    = self.get_parameter("kp").value
+        kd    = self.get_parameter("kd").value
+        v0    = self.get_parameter("v_base").value
+        vmin  = self.get_parameter("v_min").value
+        omax  = self.get_parameter("omega_max").value
         sscl  = self.get_parameter("shift_scale").value
         tout  = self.get_parameter("lost_timeout").value
         alpha = self.get_parameter("deriv_alpha").value
 
+        # Stop if line has been lost for too long
         if not self._detected and (now - self._last_seen_t > tout):
-            self._integral = 0.0
-            self._prev_err = 0.0
+            self._prev_err   = 0.0
+            self._filtered_d = 0.0
             self._stop()
             return
 
+        # Hold last steering while crossing a gap (line temporarily missing)
         if not self._detected:
             return
 
-        err = self._shift
-        self._integral = clamp(self._integral + err * dt, -200.0, 200.0)
+        # Normalise error to [-1, 1]  (+1 = line is all the way to the right)
+        err = self._shift / sscl
+
+        # Derivative: low-pass filtered  (suppresses encoder/detection noise)
         raw_d = (err - self._prev_err) / dt
         self._filtered_d = alpha * raw_d + (1.0 - alpha) * self._filtered_d
         self._prev_err = err
 
-        omega = -(kp * err + ki * self._integral + kd * self._filtered_d)
+        # PD steering command
+        omega = -(kp * err + kd * self._filtered_d)
         omega = clamp(omega, -omax, omax)
 
-        v = v0 * (1.0 - min(1.0, abs(err) / sscl))
-        v = max(vmin, v)
+        # Adaptive speed: slow down proportionally to |err| AND |d_err|
+        # — |err|  slows the robot when it's already off-centre
+        # — |d_err| slows it DOWN EARLY when the error is GROWING (anticipates curves)
+        curve_load = clamp(abs(err) + 0.4 * abs(self._filtered_d), 0.0, 1.0)
+        v = max(vmin, v0 * (1.0 - curve_load))
 
-        self._cmd_unicycle(v, omega)
+        vl, vr = unicycle_to_wheels(FORWARD_SIGN * v, omega)
+        self._publish_wheels(vl, vr)
 
 
 def main(args=None):
