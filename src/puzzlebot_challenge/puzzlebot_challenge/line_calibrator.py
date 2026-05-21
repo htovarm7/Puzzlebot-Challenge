@@ -13,7 +13,7 @@ Keys:
   space   pause / unpause (no effect in live mode — frames always flow)
 """
 
-import cv2 as cv
+import cv2 as cv    
 import numpy as np
 import sys
 import os
