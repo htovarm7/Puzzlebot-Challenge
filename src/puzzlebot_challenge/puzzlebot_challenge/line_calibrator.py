@@ -131,10 +131,17 @@ _NODE_KEYS = ("T_init", "T_min", "T_max", "dark_min", "dark_max",
 
 
 def _resolve_default_yaml() -> Path:
-    """Mirror the lookup used by hsv_calibrator: pkg/config/line_params.yaml."""
-    here     = Path(__file__).resolve().parent           # .../puzzlebot_challenge/
-    pkg_root = here.parent                               # src/puzzlebot_challenge/
-    return pkg_root / "config" / "line_params.yaml"
+    """Devuelve la ruta del YAML instalado (la misma que usa el launch).
+    Con --symlink-install el archivo instalado es una copia en build/;
+    al guardar aquí el launch lo lee directamente sin recompilar."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = get_package_share_directory("puzzlebot_challenge")
+        return Path(share) / "config" / "line_params.yaml"
+    except Exception:
+        # Fallback: ruta fuente (útil fuera de ROS)
+        here = Path(__file__).resolve().parent
+        return here.parent / "config" / "line_params.yaml"
 
 
 def save_params(p: dict, out_path: Path):
