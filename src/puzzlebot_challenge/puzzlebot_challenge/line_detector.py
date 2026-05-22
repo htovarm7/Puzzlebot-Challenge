@@ -37,7 +37,7 @@ _DEFAULT_PARAMS = {
     "blur":        21,
     "morph":       9,
     "n_track_lines": 3,
-    # Intersection detection: fraction of a row that must be white to flag crossing line
+    # Intersection detection: min fraction of frame width a horizontal contour must span
     "intersection_white_frac": 0.55,
 }
 
@@ -149,17 +149,22 @@ class LineDetection:
             binary_roi = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN,  kernel)
             binary_roi = cv2.morphologyEx(binary_roi, cv2.MORPH_CLOSE, kernel)
 
-        # Intersection detection: any row with > threshold fraction of white pixels
-        # indicates a crossing/stop line perpendicular to travel direction.
-        intr_frac = float(p.get("intersection_white_frac", 0.55))
-        row_cov = binary_roi.sum(axis=1).astype(float) / (binary_roi.shape[1] * 255.0)
-        out["intersection"] = bool(np.any(row_cov > intr_frac))
-
         contours, _ = cv2.findContours(
             binary_roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = [c for c in contours if cv2.contourArea(c) >= p["min_area"]]
         if not contours:
             return out
+
+        # Intersection detection: look for a contour whose bounding box is wide
+        # and flat — the crossing/stop line taped perpendicular to travel direction.
+        # Criteria: bounding width > 25% of frame AND width > 2× height.
+        frame_w = binary_roi.shape[1]
+        min_span = float(p.get("intersection_white_frac", 0.55)) * frame_w  # reuse param as span fraction
+        out["intersection"] = any(
+            bw >= min_span and bw >= 2.0 * bh
+            for c in contours
+            for (_, _, bw, bh) in [cv2.boundingRect(c)]
+        )
 
         # Keep only the N largest blobs — floor artifacts are always smaller than tape
         n_lines = int(p.get("n_track_lines", 3))
