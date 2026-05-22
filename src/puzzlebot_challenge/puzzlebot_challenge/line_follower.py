@@ -8,9 +8,9 @@ WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
 KP = 0.1
-KD = 0.0
+KD = 0.01
 
-V_BASE    = 0.4    # m/s cruise speed
+V_BASE    = 0.6    # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
 OMEGA_MAX = 2.0    # rad/s saturation
 
@@ -20,7 +20,6 @@ LOST_TIMEOUT = 0.5    # s without detection before stopping
 CTRL_DT      = 0.05   # 20 Hz control loop
 DERIV_ALPHA  = 0.15   # derivative low-pass
 
-# Intersection crossing parameters
 CROSSING_TIME  = 3   # s to drive straight through intersection
 TURN_TIME      = 1.8   # s to execute a directional turn
 TURN_OMEGA     = 0.8   # rad/s for intersection turns
