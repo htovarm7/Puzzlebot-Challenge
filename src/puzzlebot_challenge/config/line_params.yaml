@@ -7,3 +7,6 @@ roi_top: 0.84
 min_area: 218
 blur: 11
 morph: 12
+adaptive: 1
+adapt_block: 61
+adapt_c: 12

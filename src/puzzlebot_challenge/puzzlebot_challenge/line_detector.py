@@ -39,6 +39,11 @@ _DEFAULT_PARAMS = {
     "n_track_lines": 3,
     # Intersection detection: min fraction of frame width a horizontal contour must span
     "intersection_white_frac": 0.55,
+    # Adaptive local threshold mode (1 = on, 0 = classic global)
+    # Needs only adapt_block and adapt_c — no T calibration required.
+    "adaptive":      0,
+    "adapt_block":  61,   # neighborhood size (odd, pixels) — larger = smoother
+    "adapt_c":      12,   # line must be this many units darker than local mean
 }
 
 
@@ -67,6 +72,25 @@ class LineDetection:
             self.params.update(params)
         # Persistent adaptive threshold between frames.
         self._T_state: int = int(self.params["T_init"])
+
+    def _adaptive_roi(self, gray: np.ndarray) -> tuple[np.ndarray, int, int]:
+        """Threshold adaptativo local: no necesita T_min/T_max/dark_min/dark_max.
+        Cada píxel se compara contra el promedio de su vecindad → robusto a
+        cambios de iluminación y color de piso."""
+        p = self.params
+        h = gray.shape[0]
+        y_off = int(h * p["roi_top"])
+
+        block = int(p.get("adapt_block", 61)) | 1   # fuerza impar
+        C     = int(p.get("adapt_c", 12))
+
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            block, C,
+        )
+        return binary[y_off:, :], 0, y_off   # T_used=0 (no aplica)
 
     def _balance(self, gray: np.ndarray) -> tuple[np.ndarray | None, int, int]:
         p = self.params
@@ -133,14 +157,19 @@ class LineDetection:
         p = self.params
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         if p["blur"] >= 3:
-            k = int(p["blur"]) | 1   
+            k = int(p["blur"]) | 1
             gray = cv2.GaussianBlur(gray, (k, k), 0)
 
-        binary_roi, T_used, y_off = self._balance(gray)
+        if int(p.get("adaptive", 0)):
+            binary_roi, T_used, y_off = self._adaptive_roi(gray)
+        else:
+            binary_roi, T_used, y_off = self._balance(gray)
+            if binary_roi is None:
+                out["y_off"] = y_off
+                return out
+
         out["T_used"] = T_used
         out["y_off"]  = y_off
-        if binary_roi is None:
-            return out
 
         # Morfología
         mk = int(p["morph"])
