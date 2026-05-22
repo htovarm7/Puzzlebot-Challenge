@@ -24,13 +24,14 @@ def generate_launch_description():
 
     kp_arg       = DeclareLaunchArgument('kp',            default_value='1.2',  description='PD P gain (normalised error)')
     kd_arg       = DeclareLaunchArgument('kd',            default_value='0.35', description='PD D gain (normalised error)')
+    ka_arg       = DeclareLaunchArgument('ka',            default_value='0.4',  description='Angle correction weight (0=off, 1=full)')
     vbase_arg    = DeclareLaunchArgument('v_base',        default_value='0.12', description='Velocidad base [m/s]')
     vmin_arg     = DeclareLaunchArgument('v_min',         default_value='0.04', description='Velocidad mínima [m/s]')
     ctime_arg    = DeclareLaunchArgument('crossing_time', default_value='3.0',  description='Segundos atravesando intersección recto')
     cooldown_arg = DeclareLaunchArgument('cooldown_time', default_value='3.0',  description='Cooldown entre intersecciones [s]')
 
     return LaunchDescription([
-        kp_arg, kd_arg, vbase_arg, vmin_arg, ctime_arg, cooldown_arg,
+        kp_arg, kd_arg, ka_arg, vbase_arg, vmin_arg, ctime_arg, cooldown_arg,
 
         Node(
             package='puzzlebot_challenge',
@@ -55,6 +56,7 @@ def generate_launch_description():
             parameters=[{
                 'kp':            LaunchConfiguration('kp'),
                 'kd':            LaunchConfiguration('kd'),
+                'ka':            LaunchConfiguration('ka'),
                 'v_base':        LaunchConfiguration('v_base'),
                 'v_min':         LaunchConfiguration('v_min'),
                 'crossing_time': LaunchConfiguration('crossing_time'),

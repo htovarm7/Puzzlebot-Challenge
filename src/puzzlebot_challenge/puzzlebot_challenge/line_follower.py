@@ -9,12 +9,14 @@ FORWARD_SIGN = -1
 
 KP = 0.3
 KD = 0.08
+KA = 0.4          # angle weight relative to shift error
 
 V_BASE    = 0.6    # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
 OMEGA_MAX = 2.0    # rad/s saturation
 
 SHIFT_SCALE  = 160.0  # pixels → ±1 normalised error
+ANGLE_SCALE  = 30.0   # degrees → ±1 normalised error (±30° = max correction)
 DEADBAND     = 0.06   # normalised units
 LOST_TIMEOUT = 0.5    # s without detection before stopping
 CTRL_DT      = 0.05   # 20 Hz control loop
@@ -45,6 +47,7 @@ class LineFollowerNode(Node):
 
         self.declare_parameter("kp",            KP)
         self.declare_parameter("kd",            KD)
+        self.declare_parameter("ka",            KA)
         self.declare_parameter("v_base",        V_BASE)
         self.declare_parameter("v_min",         V_MIN)
         self.declare_parameter("omega_max",     OMEGA_MAX)
@@ -59,6 +62,7 @@ class LineFollowerNode(Node):
         self.declare_parameter("cooldown_time", COOLDOWN_TIME)
 
         self.create_subscription(Float32, "/line/shift",        self._cb_shift,        10)
+        self.create_subscription(Float32, "/line/angle",        self._cb_angle,        10)
         self.create_subscription(Bool,    "/line/detected",     self._cb_detected,     10)
         self.create_subscription(Bool,    "/line/intersection", self._cb_intersection, 10)
         self.create_subscription(String,  "/sign/command",      self._cb_sign,         10)
@@ -67,6 +71,7 @@ class LineFollowerNode(Node):
         self.pub_r = self.create_publisher(Float32, "VelocitySetR", 10)
 
         self._shift           = 0.0
+        self._angle           = 90.0
         self._detected        = False
         self._last_seen_t     = self._now()
         self._at_intersection = False
@@ -95,6 +100,9 @@ class LineFollowerNode(Node):
 
     def _cb_shift(self, msg: Float32):
         self._shift = float(msg.data)
+
+    def _cb_angle(self, msg: Float32):
+        self._angle = float(msg.data)
 
     def _cb_detected(self, msg: Bool):
         self._detected = bool(msg.data)
@@ -125,6 +133,7 @@ class LineFollowerNode(Node):
         v0    = self.get_parameter("v_base").value
         kp    = self.get_parameter("kp").value
         kd    = self.get_parameter("kd").value
+        ka    = self.get_parameter("ka").value
         omax  = self.get_parameter("omega_max").value
         sscl  = self.get_parameter("shift_scale").value
         db    = self.get_parameter("deadband").value
@@ -225,10 +234,14 @@ class LineFollowerNode(Node):
         if not self._detected:
             return
 
-        # Normalise shift error to [-1, 1]
-        err = self._shift / sscl
-        if abs(err) < db:
-            err = 0.0
+        # Normalise shift error to [-1, 1] and combine with angle error
+        shift_err = self._shift / sscl
+        if abs(shift_err) < db:
+            shift_err = 0.0
+        # angle=90° → vertical line (ideal); deviation drives heading correction
+        # (angle - 90) < 0: line tilts left → robot must turn left → positive omega
+        angle_err = (self._angle - 90.0) / ANGLE_SCALE
+        err = shift_err + ka * angle_err
 
         raw_d = (err - self._prev_err) / dt
         self._filtered_d = alpha * raw_d + (1.0 - alpha) * self._filtered_d
