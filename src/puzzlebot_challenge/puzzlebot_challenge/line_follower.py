@@ -20,7 +20,7 @@ LOST_TIMEOUT = 0.5    # s without detection before stopping
 CTRL_DT      = 0.05   # 20 Hz control loop
 DERIV_ALPHA  = 0.15   # derivative low-pass
 
-CROSSING_TIME  = 6   # s to drive straight through intersection
+CROSSING_TIME  = 6.0   # s to drive straight through intersection
 TURN_TIME      = 1.8   # s to execute a directional turn
 TURN_OMEGA     = 0.8   # rad/s for intersection turns
 STOP_WAIT      = 3.0   # s to stop at a stop sign before proceeding
