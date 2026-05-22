@@ -17,8 +17,8 @@ WHEEL_RADIUS  = 0.05154
 WHEEL_BASE    = 0.19
 FORWARD_SIGN  = -1
 
-LINEAR_SPEED  = 0.15   # [m/s]
-ANGULAR_SPEED = 0.8    # [rad/s]
+LINEAR_SPEED  = 0.30   # [m/s]
+ANGULAR_SPEED = 0.12    # [rad/s]
 PULSE_DURATION = 0.25  # [s] cuánto dura cada pulso de tecla
 
 BANNER = """
