@@ -171,13 +171,15 @@ class LineDetection:
         if len(contours) > n_lines:
             contours = sorted(contours, key=cv2.contourArea, reverse=True)[:n_lines]
 
-        # Sort by horizontal centroid and pick the MEDIAN → always the center line
+        # Pick the contour whose centroid is closest to the frame's horizontal centre.
+        # This is more robust than the median when one large off-centre blob
+        # (e.g. a nearby road boundary) skews the sorted order.
         def _cx(c):
             m = cv2.moments(c)
             return int(m["m10"] / m["m00"]) if m["m00"] else 0
 
-        contours.sort(key=_cx)
-        line = contours[len(contours) // 2]
+        roi_center_x = binary_roi.shape[1] // 2
+        line = min(contours, key=lambda c: abs(_cx(c) - roi_center_x))
 
         rect = cv2.minAreaRect(line)
         (cx, _cy), _, _ = rect
