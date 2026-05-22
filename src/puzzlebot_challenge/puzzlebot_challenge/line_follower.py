@@ -20,7 +20,7 @@ LOST_TIMEOUT = 0.5    # s without detection before stopping
 CTRL_DT      = 0.05   # 20 Hz control loop
 DERIV_ALPHA  = 0.15   # derivative low-pass
 
-CROSSING_TIME  = 3   # s to drive straight through intersection
+CROSSING_TIME  = 6   # s to drive straight through intersection
 TURN_TIME      = 1.8   # s to execute a directional turn
 TURN_OMEGA     = 0.8   # rad/s for intersection turns
 STOP_WAIT      = 3.0   # s to stop at a stop sign before proceeding
@@ -243,7 +243,8 @@ class LineFollowerNode(Node):
     def _finish_crossing(self, now: float):
         self._state             = "FOLLOWING"
         self._last_crossing_end = now
-        self._prev_inters       = False  # reset so the next real intersection triggers
+        self._prev_inters       = True   # evita re-disparo si aún está en intersección
+        self._last_seen_t       = now    # reinicia timeout para dar tiempo de encontrar línea
         self.get_logger().info("[Intersection] Crossing done — resuming line following")
 
 
