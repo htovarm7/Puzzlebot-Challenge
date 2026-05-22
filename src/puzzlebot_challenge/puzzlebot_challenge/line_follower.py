@@ -7,8 +7,8 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.01
-KD = 0.001
+KP = 0.1
+KD = 0.0
 
 V_BASE    = 0.4    # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
