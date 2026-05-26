@@ -8,13 +8,19 @@ Publishes  : /sign/command            (std_msgs/String)   stop | go_straight | t
              /vision/signs            (sensor_msgs/Image) annotated debug frame
 
 Detection pipeline (same priority order as original):
-  1. YOLOv8  (primary — CNN trained on best.pt)
+  1. YOLOv8  (primary — CNN trained on best.pt / best.engine for TensorRT)
   2. HSV color + polygon shape  (fallback for red signs)
   3. Template matching on blue ROI  (fallback for directional signs)
 
 YOLO detections above the confidence threshold are reported immediately.
 Fallback detections pass through TemporalSmoother (majority vote over a
 rolling window) to avoid single-frame flickers.
+
+Jetson Nano optimizations:
+  - Loads best.engine (TensorRT FP16) if present, else best.pt
+  - Inference runs on cuda:0 with half precision
+  - Model warmed up at startup to avoid first-frame latency spike
+  - Frame decimation: detection thread skips frames when it falls behind
 """
 
 import os
@@ -60,34 +66,82 @@ _COLORS = {
 }
 
 # ---------------------------------------------------------------------------
-# YOLO loader (lazy — only loads if best.pt exists)
+# YOLO loader — prefers TensorRT engine (.engine) over weights (.pt)
+# Device: cuda:0 (Jetson Nano GPU). Falls back to CPU if CUDA unavailable.
 # ---------------------------------------------------------------------------
-_YOLO_MODEL = None
-_YOLO_TRIED = False
+_YOLO_MODEL  = None
+_YOLO_TRIED  = False
+_INFER_HALF  = False   # set True once GPU + FP16 confirmed
+_INFER_DEVID = 0       # cuda device index
+
+
+def _resolve_model_path(base_path: str) -> str:
+    """Return best.engine if it lives next to best.pt, else return base_path."""
+    engine_path = os.path.splitext(base_path)[0] + ".engine"
+    if os.path.exists(engine_path):
+        return engine_path
+    return base_path
 
 
 def _get_model(model_path: str):
-    global _YOLO_MODEL, _YOLO_TRIED
+    global _YOLO_MODEL, _YOLO_TRIED, _INFER_HALF, _INFER_DEVID
     if _YOLO_TRIED:
         return _YOLO_MODEL
     _YOLO_TRIED = True
-    if not os.path.exists(model_path):
-        print(f"[sign_detector] WARN: model not found at {model_path} — YOLO disabled")
+
+    resolved = _resolve_model_path(model_path)
+    if not os.path.exists(resolved):
+        print(f"[sign_detector] WARN: model not found at {resolved} — YOLO disabled")
         return None
     try:
+        import torch
         from ultralytics import YOLO
-        _YOLO_MODEL = YOLO(model_path)
-        print(f"[sign_detector] YOLOv8 loaded: {model_path}")
+        _YOLO_MODEL = YOLO(resolved)
+        using_trt = resolved.endswith(".engine")
+
+        if torch.cuda.is_available():
+            _INFER_HALF  = True
+            _INFER_DEVID = 0
+            # TRT engines already embed FP16; for .pt we request half precision
+            if not using_trt:
+                _YOLO_MODEL.model.half()
+            print(f"[sign_detector] CUDA available — inference on cuda:{_INFER_DEVID}"
+                  f" {'FP16' if _INFER_HALF else 'FP32'}")
+        else:
+            _INFER_HALF  = False
+            _INFER_DEVID = "cpu"
+            print("[sign_detector] WARN: CUDA not available — running on CPU")
+
+        print(f"[sign_detector] model loaded: {resolved}"
+              f" ({'TensorRT' if using_trt else 'PyTorch'})")
         print(f"                Classes: {list(_YOLO_MODEL.names.values())}")
+
+        # Warmup: one dummy forward pass to pre-allocate CUDA/TRT buffers
+        _warmup(_YOLO_MODEL)
     except Exception as e:
         print(f"[sign_detector] WARN: could not load YOLO — {e}")
     return _YOLO_MODEL
 
 
+def _warmup(model):
+    dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+    try:
+        model.predict(
+            dummy, verbose=False, conf=0.5, imgsz=320,
+            device=_INFER_DEVID, half=_INFER_HALF,
+        )
+        print("[sign_detector] model warmup done")
+    except Exception as e:
+        print(f"[sign_detector] warmup skipped: {e}")
+
+
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.45) -> list:
     if model is None:
         return []
-    results = model(frame, verbose=False, conf=conf_thr, imgsz=320)[0]
+    results = model.predict(
+        frame, verbose=False, conf=conf_thr, imgsz=320,
+        device=_INFER_DEVID, half=_INFER_HALF,
+    )[0]
     dets = []
     for box in results.boxes:
         cls_name = model.names[int(box.cls)].lower()
@@ -322,10 +376,13 @@ class SignDetectorNode(Node):
         self.declare_parameter("image_topic", "/camera/image_raw")
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path", self._default_model_path())
+        # max YOLO inferences per second; 0 = unlimited (process every frame)
+        self.declare_parameter("max_infer_fps", 15.0)
 
         image_topic  = self.get_parameter("image_topic").value
         self._conf   = float(self.get_parameter("conf_threshold").value)
         model_path   = self.get_parameter("model_path").value
+        self._min_infer_dt = 1.0 / max(self.get_parameter("max_infer_fps").value, 0.1)
 
         self._bridge   = CvBridge()
         self._model    = _get_model(model_path)
@@ -336,6 +393,7 @@ class SignDetectorNode(Node):
         self._latest_dets    = []
         self._latest_command = "none"
         self._lock           = threading.Lock()
+        self._last_infer_t   = 0.0
 
         self.sub_img      = self.create_subscription(
             Image, image_topic, self._on_image, 10)
@@ -350,7 +408,8 @@ class SignDetectorNode(Node):
 
         self.get_logger().info(
             f"SignDetectorNode ready | topic={image_topic} | "
-            f"YOLO={'ON' if self._model else 'OFF (fallback only)'}")
+            f"YOLO={'ON' if self._model else 'OFF (fallback only)'} | "
+            f"max_infer_fps={self.get_parameter('max_infer_fps').value}")
 
     # ------------------------------------------------------------------
     def _default_model_path(self) -> str:
@@ -394,6 +453,13 @@ class SignDetectorNode(Node):
             if frame is None:
                 time.sleep(0.005)
                 continue
+
+            # Frame decimation: enforce max_infer_fps to avoid GPU queue buildup
+            now = time.monotonic()
+            elapsed = now - self._last_infer_t
+            if elapsed < self._min_infer_dt:
+                time.sleep(self._min_infer_dt - elapsed)
+            self._last_infer_t = time.monotonic()
 
             raw_dets = detect_signs(frame, self._model)
 
