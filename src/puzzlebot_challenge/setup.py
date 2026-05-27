@@ -38,7 +38,8 @@ setup(
             'teleop           = puzzlebot_challenge.teleop:main',
             'motor_watchdog   = puzzlebot_challenge.motor_watchdog:main',
             'line_viewer      = puzzlebot_challenge.line_viewer:main',
-            'sign_detector    = puzzlebot_challenge.sign_detector:main',
+            'sign_detector         = puzzlebot_challenge.sign_detector:main',
+            'sign_detector_offload = puzzlebot_challenge.sign_detector_offload:main',
         ],
     },
 )

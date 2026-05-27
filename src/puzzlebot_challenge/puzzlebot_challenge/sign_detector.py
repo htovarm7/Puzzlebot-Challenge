@@ -111,7 +111,8 @@ def _get_model(model_path: str):
             _INFER_HALF  = False
             _INFER_DEVID = "cpu"
             # Use all available CPU cores for BLAS/conv ops
-            torch.set_num_threads(torch.get_num_threads())
+            import os as _os
+            torch.set_num_threads(_os.cpu_count() or 4)
             print(f"[sign_detector] CPU mode — threads={torch.get_num_threads()}")
 
         print(f"[sign_detector] model loaded: {resolved}"
@@ -485,6 +486,9 @@ class SignDetectorNode(Node):
                 # Pick command from detection with largest bounding-box area
                 best    = max(final_dets, key=lambda d: d[3] * d[4])
                 command = best[0]
+                self.get_logger().info(
+                    f"DETECTED: {command.upper()} "
+                    f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
             else:
                 command = "none"
 
