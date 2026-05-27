@@ -110,24 +110,26 @@ def _get_model(model_path: str):
         else:
             _INFER_HALF  = False
             _INFER_DEVID = "cpu"
-            print("[sign_detector] WARN: CUDA not available — running on CPU")
+            # Use all available CPU cores for BLAS/conv ops
+            torch.set_num_threads(torch.get_num_threads())
+            print(f"[sign_detector] CPU mode — threads={torch.get_num_threads()}")
 
         print(f"[sign_detector] model loaded: {resolved}"
               f" ({'TensorRT' if using_trt else 'PyTorch'})")
         print(f"                Classes: {list(_YOLO_MODEL.names.values())}")
 
         # Warmup: one dummy forward pass to pre-allocate CUDA/TRT buffers
-        _warmup(_YOLO_MODEL)
+        _warmup(_YOLO_MODEL, imgsz=192)
     except Exception as e:
         print(f"[sign_detector] WARN: could not load YOLO — {e}")
     return _YOLO_MODEL
 
 
-def _warmup(model):
-    dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+def _warmup(model, imgsz: int = 192):
+    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
     try:
         model.predict(
-            dummy, verbose=False, conf=0.5, imgsz=320,
+            dummy, verbose=False, conf=0.5, imgsz=imgsz,
             device=_INFER_DEVID, half=_INFER_HALF,
         )
         print("[sign_detector] model warmup done")
@@ -135,11 +137,11 @@ def _warmup(model):
         print(f"[sign_detector] warmup skipped: {e}")
 
 
-def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.45) -> list:
+def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.45, imgsz: int = 192) -> list:
     if model is None:
         return []
     results = model.predict(
-        frame, verbose=False, conf=conf_thr, imgsz=320,
+        frame, verbose=False, conf=conf_thr, imgsz=imgsz,
         device=_INFER_DEVID, half=_INFER_HALF,
     )[0]
     dets = []
@@ -265,12 +267,12 @@ def _match_arrow(roi_bw):
     return best_label, best_score
 
 
-def detect_signs(frame: np.ndarray, model) -> list:
+def detect_signs(frame: np.ndarray, model, imgsz: int = 192) -> list:
     """
     3-stage pipeline identical to original.
     Returns list of (label, x, y, w, h, confidence).
     """
-    dets_yolo   = yolo_detect(frame, model)
+    dets_yolo   = yolo_detect(frame, model, imgsz=imgsz)
     yolo_labels = {d[0] for d in dets_yolo}
 
     all_labels = {"stop", "workers", "go_straight", "turn_left", "turn_right"}
@@ -377,12 +379,15 @@ class SignDetectorNode(Node):
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path", self._default_model_path())
         # max YOLO inferences per second; 0 = unlimited (process every frame)
-        self.declare_parameter("max_infer_fps", 15.0)
+        self.declare_parameter("max_infer_fps", 0.0)  # 0 = unlimited
+        self.declare_parameter("imgsz", 192)
 
         image_topic  = self.get_parameter("image_topic").value
-        self._conf   = float(self.get_parameter("conf_threshold").value)
-        model_path   = self.get_parameter("model_path").value
-        self._min_infer_dt = 1.0 / max(self.get_parameter("max_infer_fps").value, 0.1)
+        self._conf        = float(self.get_parameter("conf_threshold").value)
+        model_path        = self.get_parameter("model_path").value
+        self._imgsz       = int(self.get_parameter("imgsz").value)
+        _fps = self.get_parameter("max_infer_fps").value
+        self._min_infer_dt = (1.0 / _fps) if _fps > 0 else 0.0
 
         self._bridge   = CvBridge()
         self._model    = _get_model(model_path)
@@ -454,14 +459,15 @@ class SignDetectorNode(Node):
                 time.sleep(0.005)
                 continue
 
-            # Frame decimation: enforce max_infer_fps to avoid GPU queue buildup
-            now = time.monotonic()
-            elapsed = now - self._last_infer_t
-            if elapsed < self._min_infer_dt:
-                time.sleep(self._min_infer_dt - elapsed)
+            # Optional rate cap (max_infer_fps > 0); 0 = unlimited
+            if self._min_infer_dt > 0:
+                now = time.monotonic()
+                wait = self._min_infer_dt - (now - self._last_infer_t)
+                if wait > 0:
+                    time.sleep(wait)
             self._last_infer_t = time.monotonic()
 
-            raw_dets = detect_signs(frame, self._model)
+            raw_dets = detect_signs(frame, self._model, imgsz=self._imgsz)
 
             # YOLO detections above threshold are trusted immediately
             yolo_direct = [d for d in raw_dets
