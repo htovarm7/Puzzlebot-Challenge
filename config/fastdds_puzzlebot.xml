@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+    FastDDS unicast discovery — Puzzlebot multi-machine via Tailscale.
+
+    Solo reemplaza TU_LAPTOP_IP con tu IP de Tailscale:
+      tailscale ip -4
+
+    IP del Jetson es siempre: 100.73.89.116
+    Ver docs/MULTIPROCESSING.md para instrucciones completas.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <participant profile_name="unicast_profile" is_default_profile="true">
+        <rtps>
+            <builtin>
+                <metatrafficUnicastLocatorList>
+                    <locator>
+                        <udpv4>
+                            <!-- Tu IP de Tailscale (tailscale ip -4) -->
+                            <address>TU_LAPTOP_IP</address>
+                        </udpv4>
+                    </locator>
+                </metatrafficUnicastLocatorList>
+                <initialPeersList>
+                    <locator>
+                        <udpv4>
+                            <!-- Jetson — IP fija en Tailscale -->
+                            <address>100.73.89.116</address>
+                        </udpv4>
+                    </locator>
+                </initialPeersList>
+            </builtin>
+        </rtps>
+    </participant>
+</profiles>

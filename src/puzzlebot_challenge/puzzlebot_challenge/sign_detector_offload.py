@@ -2,30 +2,18 @@
 """
 sign_detector_offload.py — Corre en la LAPTOP y procesa las imágenes de la Jetson.
 
-La laptop recibe el stream de cámara de la Jetson por ROS2, corre YOLO+HSV
-y publica los mismos tópicos que sign_detector.py. La Jetson solo suscribe
-a los resultados — no corre inferencia.
+Jetson  →  /camera/image_raw  →  Laptop (YOLO+HSV)  →  /sign/command  →  Jetson
 
-Arquitectura de red:
-  Jetson  →  /camera/image_raw  →  Laptop (YOLO)  →  /sign/command  →  Jetson
+Tópicos publicados:
+  /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
+  /sign/detected  (std_msgs/Bool)    — True si hay señal activa
+  /vision/signs   (sensor_msgs/Image) — frame anotado, ver en rqt:
+                    ros2 run rqt_image_view rqt_image_view /vision/signs
 
-Setup:
-  1. Ambas máquinas en la misma red (Tailscale o LAN).
-  2. Mismo ROS_DOMAIN_ID en las dos:
-       export ROS_DOMAIN_ID=42
-  3. Deshabilitar localhost-only en ambas:
-       export ROS_LOCALHOST_ONLY=0
-  4. Correr en la laptop:
-       ros2 run puzzlebot_challenge sign_detector_offload
-  5. En la Jetson NO correr sign_detector — solo el traffic_controller
-     que ya suscribe a /sign/command.
-
-Para ver el video desde la laptop:
-  ros2 run rqt_image_view rqt_image_view /vision/signs
+Ver docs/MULTIPROCESSING.md para setup de red (Tailscale + FastDDS).
 """
 
 import os
-import sys
 import threading
 import time
 
