@@ -4,14 +4,13 @@ motor_watchdog.py
 =================
 Nodo de seguridad para los motores del PuzzleBot.
 
-Monitorea los comandos que llegan a los motores y, si no recibe ninguno
-en WATCHDOG_TIMEOUT segundos, publica cero para garantizar el paro.
+Actúa como puente entre los nodos de control y los motores reales:
+  - Suscribe a /cmd/VelocitySetL y /cmd/VelocitySetR  (comandos de control)
+  - Publica  a /VelocitySetL   y /VelocitySetR         (motores reales)
 
-  - Suscribe a /VelocitySetL y /VelocitySetR  (monitoreo)
-  - Publica  a /VelocitySetL y /VelocitySetR  (sólo ceros en emergencia)
-
-Los nodos de control publican directamente a /VelocitySet*; el watchdog
-sólo actúa como kill-switch de emergencia cuando el nodo de control muere.
+Si no llega ningún comando en WATCHDOG_TIMEOUT segundos, publica cero
+en ambas ruedas. Garantiza que los motores paren aunque el nodo de
+control muera abruptamente.
 """
 
 import time
@@ -31,9 +30,11 @@ class MotorWatchdogNode(Node):
         self._pub_l = self.create_publisher(Float32, '/VelocitySetL', 10)
         self._pub_r = self.create_publisher(Float32, '/VelocitySetR', 10)
 
-        self.create_subscription(Float32, '/VelocitySetL', self._cb_l, 10)
-        self.create_subscription(Float32, '/VelocitySetR', self._cb_r, 10)
+        self.create_subscription(Float32, '/cmd/VelocitySetL', self._cb_l, 10)
+        self.create_subscription(Float32, '/cmd/VelocitySetR', self._cb_r, 10)
 
+        self._last_l = 0.0
+        self._last_r = 0.0
         self._last_cmd_time = time.monotonic()
         self._timed_out = False
 
@@ -42,10 +43,12 @@ class MotorWatchdogNode(Node):
             f'MotorWatchdog listo — timeout={WATCHDOG_TIMEOUT}s')
 
     def _cb_l(self, msg: Float32):
+        self._last_l = msg.data
         self._last_cmd_time = time.monotonic()
         self._timed_out = False
 
     def _cb_r(self, msg: Float32):
+        self._last_r = msg.data
         self._last_cmd_time = time.monotonic()
         self._timed_out = False
 
@@ -58,6 +61,8 @@ class MotorWatchdogNode(Node):
                     f'Sin comandos por {elapsed:.2f}s — parando motores.')
                 self._timed_out = True
             self._publish(0.0, 0.0)
+        else:
+            self._publish(self._last_l, self._last_r)
 
     def _publish(self, wl: float, wr: float):
         ml, mr = Float32(), Float32()
