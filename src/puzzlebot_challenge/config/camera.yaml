@@ -1,8 +1,8 @@
 picam_publisher:
   ros__parameters:
-    sensor_mode: 3
-    src_width: 1640
-    src_height: 1232
+    sensor_mode: 4
+    src_width: 1280
+    src_height: 720
     src_fps: 30
     out_width: 320
     out_height: 240
