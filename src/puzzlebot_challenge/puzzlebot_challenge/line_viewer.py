@@ -49,8 +49,18 @@ def main(args=None):
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW, 640, 480)
+    try:
+        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW, 640, 480)
+    except Exception as e:
+        node.get_logger().error(
+            f'No hay display disponible: {e}\n'
+            'Usa "ssh -X" para X11 forwarding o desactiva line_viewer.'
+        )
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        return
 
     placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
     cv2.putText(placeholder, 'Esperando imagen...', (30, 120),

@@ -322,9 +322,6 @@ class LineDetectorNode(Node):
         self._publish_debug(frame, result)
 
     def _publish_debug(self, frame: np.ndarray, r: dict):
-        if self.pub_debug.get_subscription_count() == 0:
-            return
-
         vis = frame.copy()
         y_off = r["y_off"]
 

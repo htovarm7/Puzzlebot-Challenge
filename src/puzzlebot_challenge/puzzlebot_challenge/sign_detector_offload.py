@@ -50,7 +50,7 @@ class SignDetectorOffloadNode(Node):
         super().__init__("sign_detector_offload")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.45)
+        self.declare_parameter("conf_threshold", 0.60)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)   # laptop puede con 320+
 
@@ -84,9 +84,6 @@ class SignDetectorOffloadNode(Node):
             f"SignDetectorOffload (laptop) | topic={image_topic} | "
             f"imgsz={self._imgsz} | "
             f"YOLO={'ON' if self._model else 'OFF (fallback only)'}")
-        self.get_logger().info(
-            "Asegurate de que ROS_DOMAIN_ID y ROS_LOCALHOST_ONLY=0 "
-            "sean iguales en laptop y Jetson.")
 
     def _default_model_path(self) -> str:
         try:

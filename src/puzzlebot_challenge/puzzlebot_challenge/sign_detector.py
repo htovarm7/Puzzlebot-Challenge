@@ -100,11 +100,8 @@ def _get_model(model_path: str):
         using_trt = resolved.endswith(".engine")
 
         if torch.cuda.is_available():
-            _INFER_HALF  = True
+            _INFER_HALF  = not using_trt  # TRT engines embed FP16 natively; .pt uses half via predict()
             _INFER_DEVID = 0
-            # TRT engines already embed FP16; for .pt we request half precision
-            if not using_trt:
-                _YOLO_MODEL.model.half()
             print(f"[sign_detector] CUDA available — inference on cuda:{_INFER_DEVID}"
                   f" {'FP16' if _INFER_HALF else 'FP32'}")
         else:
