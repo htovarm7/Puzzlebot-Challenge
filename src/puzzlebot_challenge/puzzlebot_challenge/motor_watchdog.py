@@ -5,8 +5,8 @@ motor_watchdog.py
 Nodo de seguridad para los motores del PuzzleBot.
 
 Actúa como puente entre los nodos de control y los motores reales:
-  - Suscribe a /cmd/VelocitySetL y /cmd/VelocitySetR  (comandos de control)
-  - Publica  a /VelocitySetL   y /VelocitySetR         (motores reales)
+  - Suscribe a /VelocitySetL y /VelocitySetR  (monitorea comandos)
+  - Publica  a /VelocitySetL y /VelocitySetR  (pasa comandos o para motores)
 
 Si no llega ningún comando en WATCHDOG_TIMEOUT segundos, publica cero
 en ambas ruedas. Garantiza que los motores paren aunque el nodo de
@@ -30,8 +30,8 @@ class MotorWatchdogNode(Node):
         self._pub_l = self.create_publisher(Float32, '/VelocitySetL', 10)
         self._pub_r = self.create_publisher(Float32, '/VelocitySetR', 10)
 
-        self.create_subscription(Float32, '/cmd/VelocitySetL', self._cb_l, 10)
-        self.create_subscription(Float32, '/cmd/VelocitySetR', self._cb_r, 10)
+        self.create_subscription(Float32, '/VelocitySetL', self._cb_l, 10)
+        self.create_subscription(Float32, '/VelocitySetR', self._cb_r, 10)
 
         self._last_l = 0.0
         self._last_r = 0.0
