@@ -125,7 +125,7 @@ class SignDetectorOffloadNode(Node):
         super().__init__("sign_detector_offload")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.60)
+        self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
 
