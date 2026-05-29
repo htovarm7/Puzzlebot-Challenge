@@ -48,14 +48,24 @@ def _find_libgomp() -> str:
     Devuelve la ruta al libgomp de PyTorch para precargarla con LD_PRELOAD.
     Necesario en Jetson: ROS2 ocupa el TLS block antes de que torch lo pueda usar,
     causando 'cannot allocate memory in static TLS block' al importar torch.
+    NO importa torch aquí — el proceso de launch también tendría el mismo conflicto.
+    Busca el archivo directamente en el sistema de archivos.
     """
-    try:
-        import torch
-        base = os.path.dirname(torch.__file__)
-        hits = glob.glob(os.path.join(base, '**', 'libgomp*.so*'), recursive=True)
-        return hits[0] if hits else ''
-    except Exception:
-        return ''
+    search_roots = [
+        os.path.expanduser('~/.local/lib'),
+        '/usr/local/lib',
+        '/usr/lib',
+        '/opt/conda/lib',
+    ]
+    for root in search_roots:
+        hits = glob.glob(
+            os.path.join(root, 'python*', 'site-packages', 'torch', 'torch.libs', 'libgomp*.so*')
+        ) + glob.glob(
+            os.path.join(root, 'python*', 'dist-packages', 'torch', 'torch.libs', 'libgomp*.so*')
+        )
+        if hits:
+            return hits[0]
+    return ''
 
 
 def generate_launch_description():
