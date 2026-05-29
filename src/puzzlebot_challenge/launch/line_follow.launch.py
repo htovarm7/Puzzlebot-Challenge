@@ -73,11 +73,12 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Ventana de debug de visión (requiere DISPLAY — usar ssh -X)
+        # Stream MJPEG del debug de visión — abrir en http://<JETSON_IP>:8080/
         Node(
             package='puzzlebot_challenge',
-            executable='line_viewer',
-            name='line_viewer',
+            executable='cam_server',
+            name='cam_server',
+            parameters=[{'topic': '/vision/line', 'host': '0.0.0.0', 'port': 8080}],
             output='screen',
         ),
     ])
