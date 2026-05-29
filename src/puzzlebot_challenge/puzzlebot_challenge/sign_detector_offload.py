@@ -161,7 +161,7 @@ class SignDetectorOffloadNode(Node):
         self._det_thread.start()
 
         self.get_logger().info(
-            f"SignDetectorOffload (laptop) | topic={image_topic} | "
+            f"SignDetector | topic={image_topic} | "
             f"imgsz={self._imgsz} | conf>={self._conf:.0%} | "
             f"YOLO={'ON' if self._model else 'OFF'}")
 
