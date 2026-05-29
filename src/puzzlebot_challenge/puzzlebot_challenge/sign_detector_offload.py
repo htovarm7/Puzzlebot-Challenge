@@ -51,8 +51,10 @@ def _get_model(model_path: str):
         print(f"[sign_detector] WARN: model not found at {resolved} — YOLO disabled")
         return None
     try:
+        print(f"[sign_detector] Cargando modelo: {resolved}")
         import torch
         from ultralytics import YOLO
+        print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}")
         _YOLO_MODEL  = YOLO(resolved)
         using_trt    = resolved.endswith(".engine")
 
@@ -74,7 +76,9 @@ def _get_model(model_path: str):
 
         _warmup(_YOLO_MODEL, imgsz=192)
     except Exception as e:
-        print(f"[sign_detector] WARN: could not load YOLO — {e}")
+        import traceback
+        print(f"[sign_detector] ERROR al cargar YOLO: {e}")
+        traceback.print_exc()
     return _YOLO_MODEL
 
 
