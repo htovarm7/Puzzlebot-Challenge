@@ -15,15 +15,8 @@ import numpy as np
 import cv2
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-
-_SENSOR_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=1,
-)
 
 WINDOW = "Sign Detector — Bounding Boxes"
 
@@ -35,7 +28,7 @@ class SignViewerNode(Node):
         self._bridge = CvBridge()
         self._latest = None
 
-        self.create_subscription(Image, "/vision/signs", self._on_image, _SENSOR_QOS)
+        self.create_subscription(Image, "/vision/signs", self._on_image, 10)
         self.create_timer(0.033, self._show)  # ~30 fps display
 
         self.get_logger().info("SignViewer listo — suscrito a /vision/signs")
