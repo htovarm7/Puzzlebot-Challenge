@@ -20,7 +20,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from flask import Flask, request, jsonify
 
-VALID_COMMANDS = {"stop", "go_straight", "turn_left", "turn_right", "workers", "none"}
+VALID_COMMANDS = {"stop", "give_way", "go_straight", "turn_left", "turn_right", "workers", "none"}
 
 
 class SignApiNode(Node):
