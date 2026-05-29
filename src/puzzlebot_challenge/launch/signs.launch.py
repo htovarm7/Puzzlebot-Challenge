@@ -34,12 +34,28 @@ Uso:
   ros2 launch puzzlebot_challenge signs.launch.py v_base:=0.10 debug:=true
 """
 
+import glob
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _find_libgomp() -> str:
+    """
+    Devuelve la ruta al libgomp de PyTorch para precargarla con LD_PRELOAD.
+    Necesario en Jetson: ROS2 ocupa el TLS block antes de que torch lo pueda usar,
+    causando 'cannot allocate memory in static TLS block' al importar torch.
+    """
+    try:
+        import torch
+        base = os.path.dirname(torch.__file__)
+        hits = glob.glob(os.path.join(base, '**', 'libgomp*.so*'), recursive=True)
+        return hits[0] if hits else ''
+    except Exception:
+        return ''
 
 
 def generate_launch_description():
@@ -163,7 +179,11 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription(args + [
+    # Precarga libgomp de torch para evitar el error de TLS en Jetson+ROS2
+    libgomp = _find_libgomp()
+    preload = ([SetEnvironmentVariable('LD_PRELOAD', libgomp)] if libgomp else [])
+
+    return LaunchDescription(preload + args + [
         picam,
         line_detector,
         traffic_detector,
