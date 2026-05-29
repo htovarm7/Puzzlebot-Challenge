@@ -65,7 +65,8 @@ def generate_launch_description():
         DeclareLaunchArgument('straight_time',    default_value='3.0',  description='Duración del override recto [s]'),
         DeclareLaunchArgument('straight_v',       default_value='0.12', description='Velocidad del override recto [m/s]'),
         DeclareLaunchArgument('sign_cooldown',    default_value='4.0',  description='Cooldown entre señales iguales [s]'),
-        DeclareLaunchArgument('debug',            default_value='false', description='Logs de debug por frame'),
+        DeclareLaunchArgument('conf_threshold',   default_value='0.50', description='Umbral de confianza YOLO (0-1)'),
+        DeclareLaunchArgument('imgsz',            default_value='320',  description='Tamaño de imagen para inferencia YOLO'),
     ]
 
     # ── 1. Cámara CSI ────────────────────────────────────────────────────────
@@ -138,13 +139,19 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 6. API HTTP para /sign/command desde la laptop ────────────────────────
-    #   La laptop corre sign_detector_offload (YOLO RTX 4060) y hace POST aquí.
-    #   POST http://<JETSON_IP>:8081/sign  {"command": "turn_left"}
-    sign_api = Node(
+    # ── 6. Detector de señales YOLO — corre en la Jetson ─────────────────────
+    #   Suscribe: /camera/image_raw
+    #   Publica:  /sign/command, /sign/detected, /vision/signs (debug)
+    sign_detector = Node(
         package='puzzlebot_challenge',
-        executable='sign_api',
-        name='sign_api',
+        executable='sign_detector_offload',
+        name='sign_detector',
+        parameters=[{
+            'image_topic':    '/camera/image_raw',
+            'conf_threshold': LaunchConfiguration('conf_threshold'),
+            'imgsz':          LaunchConfiguration('imgsz'),
+            'jetson_api':     '',   # vacío = no hace HTTP POST (todo es local)
+        }],
         output='screen',
     )
 
@@ -160,8 +167,8 @@ def generate_launch_description():
         picam,
         line_detector,
         traffic_detector,
+        sign_detector,
         line_follower,
         sign_behavior,
-        sign_api,
         motor_watchdog,
     ])

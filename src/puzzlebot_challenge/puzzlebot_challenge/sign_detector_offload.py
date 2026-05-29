@@ -195,6 +195,8 @@ class SignDetectorOffloadNode(Node):
 
     def _post_sign(self, command: str):
         self._last_posted = command
+        if not self._jetson_api:
+            return
         try:
             import requests
             requests.post(self._jetson_api,
