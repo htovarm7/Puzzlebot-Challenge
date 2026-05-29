@@ -157,9 +157,6 @@ class SignDetectorOffloadNode(Node):
             f"SignDetectorOffload (laptop) | topic={image_topic} | "
             f"imgsz={self._imgsz} | conf>={self._conf:.0%} | "
             f"YOLO={'ON' if self._model else 'OFF'}")
-        self.get_logger().info(
-            "Asegurate de que ROS_DOMAIN_ID y ROS_LOCALHOST_ONLY=0 "
-            "sean iguales en laptop y Jetson.")
 
     def _default_model_path(self) -> str:
         try:

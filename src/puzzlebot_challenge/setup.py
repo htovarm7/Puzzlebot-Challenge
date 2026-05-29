@@ -41,6 +41,7 @@ setup(
             'sign_detector         = puzzlebot_challenge.sign_detector:main',
             'sign_detector_offload = puzzlebot_challenge.sign_detector_offload:main',
             'sign_viewer           = puzzlebot_challenge.sign_viewer:main',
+            'sign_api              = puzzlebot_challenge.sign_api:main',
         ],
     },
 )

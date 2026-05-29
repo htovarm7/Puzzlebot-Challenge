@@ -80,4 +80,14 @@ def generate_launch_description():
             name='line_viewer',
             output='screen',
         ),
+
+        # API HTTP para recibir sign commands desde la laptop sin DDS
+        # POST http://<JETSON_IP>:8081/sign  {"command": "turn_left"}
+        # GET  http://<JETSON_IP>:8081/sign/turn_left
+        Node(
+            package='puzzlebot_challenge',
+            executable='sign_api',
+            name='sign_api',
+            output='screen',
+        ),
     ])
