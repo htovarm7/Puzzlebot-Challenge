@@ -12,18 +12,10 @@
     <participant profile_name="unicast_profile" is_default_profile="true">
         <rtps>
             <builtin>
-                <metatrafficUnicastLocatorList>
-                    <locator>
-                        <udpv4>
-                            <!-- Tu IP de Tailscale (tailscale ip -4) -->
-                            <address>TU_LAPTOP_IP</address>
-                        </udpv4>
-                    </locator>
-                </metatrafficUnicastLocatorList>
                 <initialPeersList>
                     <locator>
                         <udpv4>
-                            <!-- Jetson — IP fija en Tailscale -->
+                            <!-- IP del Jetson en Tailscale (fija) -->
                             <address>100.73.89.116</address>
                         </udpv4>
                     </locator>
