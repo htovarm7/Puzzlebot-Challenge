@@ -7,6 +7,10 @@ Uso:
   ros2 run puzzlebot_challenge sign_viewer
 """
 
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+import numpy as np
 import cv2
 import rclpy
 from rclpy.node import Node
@@ -33,8 +37,6 @@ class SignViewerNode(Node):
         self.create_subscription(Image, "/vision/signs", self._on_image, _SENSOR_QOS)
         self.create_timer(0.033, self._show)  # ~30 fps display
 
-        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WINDOW, 800, 600)
         self.get_logger().info("SignViewer listo — suscrito a /vision/signs")
 
     def _on_image(self, msg: Image):
@@ -45,8 +47,12 @@ class SignViewerNode(Node):
 
     def _show(self):
         if self._latest is None:
-            return
-        cv2.imshow(WINDOW, self._latest)
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "Esperando /vision/signs ...", (80, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
+        else:
+            frame = self._latest
+        cv2.imshow(WINDOW, frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             cv2.destroyAllWindows()
             raise SystemExit
