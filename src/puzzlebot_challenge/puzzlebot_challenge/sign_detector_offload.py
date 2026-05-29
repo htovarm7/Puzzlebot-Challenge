@@ -1,17 +1,33 @@
 #!/usr/bin/env python3
 """
-sign_detector_offload.py — Corre en la LAPTOP y procesa las imágenes de la Jetson.
-
-Jetson  →  /camera/image_raw  →  Laptop (YOLO)  →  /sign/command  →  Jetson
+sign_detector_offload.py — Detecta señales de tránsito con YOLO.
 
 Tópicos publicados:
   /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
   /sign/detected  (std_msgs/Bool)    — True si hay señal activa
-  /vision/signs   (sensor_msgs/Image) — frame anotado, ver en rqt:
-                    ros2 run rqt_image_view rqt_image_view /vision/signs
-
-Ver docs/MULTIPROCESSING.md para setup de red (Tailscale + FastDDS).
+  /vision/signs   (sensor_msgs/Image) — frame anotado
 """
+
+# ── Fix: TLS block en Jetson + ROS2 ──────────────────────────────────────────
+# rclpy carga muchas .so que agotan el TLS estático antes de que torch pueda
+# reservar su bloque para libgomp.  Cargamos libgomp con ctypes AQUÍ, antes de
+# cualquier import de rclpy, para que llegue primero al TLS.
+import ctypes as _ctypes
+import glob as _glob
+import os as _os
+for _pat in [
+    _os.path.expanduser('~/.local/lib/python*/site-packages/torch/torch.libs/libgomp*.so*'),
+    '/usr/local/lib/python*/dist-packages/torch/torch.libs/libgomp*.so*',
+    '/opt/conda/lib/python*/site-packages/torch/torch.libs/libgomp*.so*',
+]:
+    for _hit in _glob.glob(_pat):
+        try:
+            _ctypes.CDLL(_hit)
+            print(f"[sign_detector] libgomp precargado: {_hit}", flush=True)
+        except Exception:
+            pass
+        break
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import threading
