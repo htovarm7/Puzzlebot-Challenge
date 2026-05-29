@@ -7,8 +7,9 @@ Uso:
   ros2 run puzzlebot_challenge sign_viewer
 """
 
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+import sys
+# Use system OpenCV (GTK backend) instead of pip OpenCV (Qt backend)
+sys.path.insert(0, '/usr/lib/python3/dist-packages')
 
 import numpy as np
 import cv2
