@@ -11,7 +11,7 @@ KP = 0.3
 KD = 0.08
 KA = 0.4          # angle weight relative to shift error
 
-V_BASE    = 0.6    # m/s cruise speed
+V_BASE    = 0.4    # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
 OMEGA_MAX = 2.0    # rad/s saturation
 
