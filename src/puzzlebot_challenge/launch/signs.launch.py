@@ -38,7 +38,7 @@ import glob
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -191,9 +191,14 @@ def generate_launch_description():
 
     # Precarga libgomp de torch para evitar el error de TLS en Jetson+ROS2
     libgomp = _find_libgomp()
-    preload = ([SetEnvironmentVariable('LD_PRELOAD', libgomp)] if libgomp else [])
+    env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
+    if libgomp:
+        env_actions.append(SetEnvironmentVariable('LD_PRELOAD', libgomp))
+        env_actions.append(LogInfo(msg=f'[signs.launch] LD_PRELOAD={libgomp}'))
+    else:
+        env_actions.append(LogInfo(msg='[signs.launch] WARN: libgomp no encontrado — torch puede fallar en ROS2'))
 
-    return LaunchDescription(preload + args + [
+    return LaunchDescription(env_actions + args + [
         picam,
         line_detector,
         traffic_detector,
