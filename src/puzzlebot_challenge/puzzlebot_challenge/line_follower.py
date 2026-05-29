@@ -29,6 +29,9 @@ STOP_WAIT      = 3.0   # s to stop at a stop sign before proceeding
 APPROACH_TIME  = 0.5   # s of straight driving before executing a turn
 COOLDOWN_TIME  = 3.0   # s after crossing before next intersection can trigger
 
+# Traffic light states that block movement
+BLOCKING_STATES = {"red", "yellow"}
+
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
@@ -66,6 +69,7 @@ class LineFollowerNode(Node):
         self.create_subscription(Bool,    "/line/detected",     self._cb_detected,     10)
         self.create_subscription(Bool,    "/line/intersection", self._cb_intersection, 10)
         self.create_subscription(String,  "/sign/command",      self._cb_sign,         10)
+        self.create_subscription(String,  "/traffic_light",     self._cb_traffic,      10)
 
         self.pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self.pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
@@ -77,6 +81,9 @@ class LineFollowerNode(Node):
         self._at_intersection = False
         self._prev_inters     = False   # for rising-edge detection
         self._sign_command    = "none"
+
+        # Traffic light — highest priority gate
+        self._traffic_state = "none"   # red | yellow | green | none
 
         # Intersection state machine
         self._state              = "FOLLOWING"  # "FOLLOWING" | "CROSSING"
@@ -92,7 +99,7 @@ class LineFollowerNode(Node):
 
         self.get_logger().info(
             f"LineFollower ready  Kp={KP}  Kd={KD}  v_base={V_BASE} m/s  "
-            f"[intersection support ON]")
+            f"[intersection ON | traffic_light ON]")
 
     # ------------------------------------------------------------------
     def _now(self) -> float:
@@ -114,6 +121,18 @@ class LineFollowerNode(Node):
 
     def _cb_sign(self, msg: String):
         self._sign_command = msg.data
+
+    def _cb_traffic(self, msg: String):
+        state = msg.data.lower()
+        if state == self._traffic_state:
+            return
+        self.get_logger().info(f"[TrafficLight] {self._traffic_state.upper()} → {state.upper()}")
+        prev = self._traffic_state
+        self._traffic_state = state
+        # Unblocking transition: reset lost-line timer so the robot resumes immediately
+        if prev in BLOCKING_STATES and state not in BLOCKING_STATES:
+            self._last_seen_t = self._now()
+            self.get_logger().info("[TrafficLight] GREEN/NONE — resuming")
 
     def _publish_wheels(self, wl: float, wr: float):
         ml, mr = Float32(), Float32()
@@ -144,6 +163,17 @@ class LineFollowerNode(Node):
         t_omg  = self.get_parameter("turn_omega").value
         s_wait = self.get_parameter("stop_wait").value
         cool   = self.get_parameter("cooldown_time").value
+
+        # ── PRIORIDAD 1: SEMÁFORO ───────────────────────────────────────
+        # Red/yellow block all movement regardless of line or intersection state.
+        # We keep updating _last_seen_t so the lost-line timer doesn't fire while
+        # the robot is legally stopped at a red light.
+        if self._traffic_state in BLOCKING_STATES:
+            self._last_seen_t = now
+            self._prev_err    = 0.0
+            self._filtered_d  = 0.0
+            self._stop()
+            return
 
         # ── CROSSING STATE ──────────────────────────────────────────────
         if self._state == "CROSSING":
