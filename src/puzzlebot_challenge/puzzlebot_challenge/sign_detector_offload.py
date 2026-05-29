@@ -128,7 +128,7 @@ class SignDetectorOffloadNode(Node):
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("jetson_api",     "http://10.22.171.82:8081/sign")
+        self.declare_parameter("jetson_api",     "http://100.73.89.116:8081/sign")
 
         image_topic = self.get_parameter("image_topic").value
         self._conf  = float(self.get_parameter("conf_threshold").value)
