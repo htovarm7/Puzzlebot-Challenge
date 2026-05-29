@@ -16,7 +16,6 @@ Ver docs/MULTIPROCESSING.md para setup de red (Tailscale + FastDDS).
 import os
 import threading
 import time
-from collections import deque, Counter
 
 import cv2
 import numpy as np
@@ -28,37 +27,6 @@ from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
-# ---------------------------------------------------------------------------
-# Label maps
-# ---------------------------------------------------------------------------
-_YOLO_MAP = {
-    "goleft":     "turn_left",
-    "goright":    "turn_right",
-    "gostraight": "go_straight",
-    "stop":       "stop",
-    "workers":    "workers",
-}
-
-_DISPLAY = {
-    "stop":        "STOP",
-    "workers":     "TRABAJADORES",
-    "go_straight": "SIGA RECTO",
-    "turn_left":   "VUELTA IZQ.",
-    "turn_right":  "VUELTA DER.",
-    "none":        "Sin señal",
-}
-
-_COLORS = {
-    "stop":        (0,   0,   220),
-    "workers":     (0,   140, 255),
-    "go_straight": (30,  200, 30),
-    "turn_left":   (200, 180, 0),
-    "turn_right":  (200, 180, 0),
-}
-
-# ---------------------------------------------------------------------------
-# YOLO model loader
-# ---------------------------------------------------------------------------
 _YOLO_MODEL  = None
 _YOLO_TRIED  = False
 _INFER_HALF  = False
@@ -127,10 +95,7 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 3
                             device=_INFER_DEVID, half=_INFER_HALF)[0]
     dets = []
     for box in results.boxes:
-        cls_name = model.names[int(box.cls)].lower()
-        label    = _YOLO_MAP.get(cls_name)
-        if label is None:
-            continue
+        label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
@@ -139,57 +104,14 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 3
 def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
     out = frame.copy()
     for label, x, y, w, h, conf in dets:
-        color = _COLORS.get(label, (255, 255, 255))
-        text  = _DISPLAY.get(label, label.upper())
-        cv2.rectangle(out, (x, y), (x + w, y + h), color, 2)
-        cv2.putText(out, f"{text} {conf:.0%}", (x, max(y - 6, 14)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    bg_color = _COLORS.get(command, (60, 60, 60))
-    cv2.rectangle(out, (0, 0), (out.shape[1], 28), bg_color, -1)
-    cv2.putText(out, f"CMD: {_DISPLAY.get(command, command.upper())}", (6, 20),
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(out, f"{label.upper()} {conf:.0%}", (x, max(y - 6, 14)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.rectangle(out, (0, 0), (out.shape[1], 28), (50, 50, 50), -1)
+    cv2.putText(out, f"CMD: {command.upper()}", (6, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return out
 
-
-# ---------------------------------------------------------------------------
-# Temporal smoother — stabilizes detections over a rolling window
-# ---------------------------------------------------------------------------
-class TemporalSmoother:
-    WINDOW    = 15
-    THRESHOLD = 0.45
-
-    def __init__(self):
-        self._red_buf  = deque(maxlen=self.WINDOW)
-        self._blue_buf = deque(maxlen=self.WINDOW)
-
-    def update(self, raw_dets: list) -> list:
-        red_label = blue_label = None
-        red_det   = blue_det   = None
-        for det in raw_dets:
-            label = det[0]
-            if label in ("stop", "workers"):
-                red_label, red_det = label, det
-            else:
-                blue_label, blue_det = label, det
-
-        self._red_buf.append(red_label)
-        self._blue_buf.append(blue_label)
-
-        stable = []
-        for buf, det in ((self._red_buf, red_det), (self._blue_buf, blue_det)):
-            counts = Counter(x for x in buf if x is not None)
-            if not counts:
-                continue
-            top_label, top_count = counts.most_common(1)[0]
-            if top_count / self.WINDOW >= self.THRESHOLD:
-                if det and det[0] == top_label:
-                    stable.append(det)
-        return stable
-
-
-# ---------------------------------------------------------------------------
-# QoS sensor-like: best effort, keep last 1 — reduce latencia en red
-# ---------------------------------------------------------------------------
 _SENSOR_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     history=HistoryPolicy.KEEP_LAST,
@@ -212,9 +134,8 @@ class SignDetectorOffloadNode(Node):
         self._imgsz = int(self.get_parameter("imgsz").value)
         model_path  = self.get_parameter("model_path").value
 
-        self._bridge   = CvBridge()
-        self._model    = _get_model(model_path)
-        self._smoother = TemporalSmoother()
+        self._bridge  = CvBridge()
+        self._model   = _get_model(model_path)
 
         self._pending_frame  = None
         self._latest_dets    = []
@@ -279,10 +200,9 @@ class SignDetectorOffloadNode(Node):
                 time.sleep(0.005)
                 continue
 
-            raw_dets   = yolo_detect(frame, self._model,
+            final_dets = yolo_detect(frame, self._model,
                                      conf_thr=self._conf,
                                      imgsz=self._imgsz)
-            final_dets = self._smoother.update(raw_dets)
 
             if final_dets:
                 best    = max(final_dets, key=lambda d: d[3] * d[4])

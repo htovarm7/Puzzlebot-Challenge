@@ -67,8 +67,8 @@ class LineFollowerNode(Node):
         self.create_subscription(Bool,    "/line/intersection", self._cb_intersection, 10)
         self.create_subscription(String,  "/sign/command",      self._cb_sign,         10)
 
-        self.pub_l = self.create_publisher(Float32, "VelocitySetL", 10)
-        self.pub_r = self.create_publisher(Float32, "VelocitySetR", 10)
+        self.pub_l = self.create_publisher(Float32, "/cmd/VelocitySetL", 10)
+        self.pub_r = self.create_publisher(Float32, "/cmd/VelocitySetR", 10)
 
         self._shift           = 0.0
         self._angle           = 90.0
