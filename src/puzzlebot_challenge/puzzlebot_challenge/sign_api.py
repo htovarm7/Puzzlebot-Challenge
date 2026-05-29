@@ -41,7 +41,13 @@ class SignApiNode(Node):
                                    threaded=True, debug=False, use_reloader=False),
             daemon=True
         ).start()
-        self.get_logger().info(f'SignAPI listo en http://0.0.0.0:{port}/sign')
+        self.get_logger().info(
+            f'SignAPI listo en http://0.0.0.0:{port}/sign\n'
+            f'  Desde la laptop: ros2 launch puzzlebot_challenge signs_laptop.launch.py '
+            f'jetson_ip:=<IP_JETSON>\n'
+            f'  O directo: curl -X POST http://<IP_JETSON>:{port}/sign '
+            f'-H "Content-Type: application/json" -d \'{{"command":"stop"}}\''
+        )
 
     def _publish(self, cmd: str):
         msg = String()

@@ -4,7 +4,7 @@ signs.launch.py
 Stack completo para detección de señales de tránsito con acciones.
 
 Nodos (Jetson — este launch):
-  1. picam_publisher          – driver cámara CSI
+  1. picam_publisher          – driver cámara CSI  (desactivar con with_camera:=false)
   2. line_detector            – /line/shift, /line/angle, /line/detected
   3. traffic_detector (HSV)   – /traffic_light  (red | yellow | green | none)
   4. line_follower            – control PD de línea
@@ -18,11 +18,11 @@ Nodos (Jetson — este launch):
                                    turn_right  → al dejar de ver la señal, gira derecha
                                    go_straight → al dejar de ver la señal, avanza recto
                                  ↳ publica → /VelocitySetL, /VelocitySetR
-  6. sign_api                 – HTTP server para recibir /sign/command desde laptop
+  6. sign_api                 – HTTP server (puerto 8081) para recibir /sign/command
   7. motor_watchdog           – para motores si no llegan comandos
 
-Nodo (Laptop — correr en terminal separada):
-  ros2 run puzzlebot_challenge sign_detector_offload
+Laptop (terminal separada):
+  ros2 launch puzzlebot_challenge signs_laptop.launch.py jetson_ip:=<IP_JETSON>
 
 Prioridad de control:
   1° /traffic_light  red/yellow → STOP  (en line_follower)
