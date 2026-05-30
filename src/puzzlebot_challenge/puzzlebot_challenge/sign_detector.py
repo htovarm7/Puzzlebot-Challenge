@@ -59,7 +59,6 @@ def _get_model(model_path: str):
         print(f"[sign_detector] device={device}")
 
         print(f"[sign_detector] model loaded: {model_path}")
-        _warmup(_YOLO_MODEL, imgsz=320)
     except Exception as e:
         import sys, traceback
         print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
@@ -124,10 +123,10 @@ class SignDetectorNode(Node):
         self._bridge = CvBridge()
         self._model  = _get_model(model_path)
 
-        self._frame_count    = 0
         self._latest_dets    = []
         self._latest_command = "none"
         self._last_status_t  = time.monotonic()
+        self._frames_in      = 0
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, _SENSOR_QOS)
@@ -156,14 +155,7 @@ class SignDetectorNode(Node):
             self.get_logger().warn(f"Image conversion failed: {e}")
             return
 
-        self._frame_count += 1
-        # Process every 3rd frame to keep ~10 fps inference on Jetson CUDA
-        if self._frame_count % 3 != 0:
-            c_msg = String(); c_msg.data = self._latest_command
-            d_msg = Bool();   d_msg.data = (self._latest_command != "none")
-            self.pub_command.publish(c_msg)
-            self.pub_detected.publish(d_msg)
-            return
+        self._frames_in += 1
 
         try:
             final_dets = yolo_detect(frame, self._model,
@@ -183,7 +175,7 @@ class SignDetectorNode(Node):
             command = "none"
             now = time.monotonic()
             if now - self._last_status_t >= 5.0:
-                self.get_logger().info(f"[detector] nada detectado | frame={self._frame_count}")
+                self.get_logger().info(f"[detector] nada detectado | frames_in={self._frames_in}")
                 self._last_status_t = now
 
         self._latest_dets    = final_dets
