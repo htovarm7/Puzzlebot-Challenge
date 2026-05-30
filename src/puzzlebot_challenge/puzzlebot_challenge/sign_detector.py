@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
 """
-sign_detector_offload.py — Detecta señales de tránsito con YOLO.
+sign_detector.py — Detecta señales de tránsito con YOLO.
 
 Tópicos publicados:
   /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
   /sign/detected  (std_msgs/Bool)    — True si hay señal activa
   /vision/signs   (sensor_msgs/Image) — frame anotado
 """
-
-import ctypes as _ctypes
-import glob as _glob
-import os as _os
-for _pat in [
-    _os.path.expanduser('~/.local/lib/python*/site-packages/torch/torch.libs/libgomp*.so*'),
-    '/usr/local/lib/python*/dist-packages/torch/torch.libs/libgomp*.so*',
-    '/opt/conda/lib/python*/site-packages/torch/torch.libs/libgomp*.so*',
-]:
-    for _hit in _glob.glob(_pat):
-        try:
-            _ctypes.CDLL(_hit)
-            print(f"[sign_detector] libgomp precargado: {_hit}", flush=True)
-        except Exception:
-            pass
-        break
-# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import threading
@@ -45,53 +28,35 @@ _INFER_HALF  = False
 _INFER_DEVID = 0
 
 
-def _resolve_model_path(base_path: str) -> str:
-    engine_path = os.path.splitext(base_path)[0] + ".engine"
-    if os.path.exists(engine_path):
-        return engine_path
-    return base_path
-
-
 def _get_model(model_path: str):
     global _YOLO_MODEL, _YOLO_TRIED, _INFER_HALF, _INFER_DEVID
     if _YOLO_TRIED:
         return _YOLO_MODEL
     _YOLO_TRIED = True
 
-    resolved = _resolve_model_path(model_path)
-    if not os.path.exists(resolved):
-        print(f"[sign_detector] WARN: model not found at {resolved} — YOLO disabled", flush=True)
+    if not os.path.exists(model_path):
+        print(f"[sign_detector] WARN: model not found at {model_path} — YOLO disabled", flush=True)
         return None
     try:
-        print(f"[sign_detector] Cargando modelo: {resolved}", flush=True)
-        import torch
+        import sys, traceback, torch
         from ultralytics import YOLO
         print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
-        _YOLO_MODEL  = YOLO(resolved)
-        using_trt    = resolved.endswith(".engine")
+        _YOLO_MODEL = YOLO(model_path)
 
         if torch.cuda.is_available():
-            # Let predict(half=True) handle FP16 casting — don't call .model.half() manually
-            _INFER_HALF  = not using_trt  # TRT engines embed FP16 natively
             _INFER_DEVID = 0
-            print(f"[sign_detector] CUDA available — inference on cuda:{_INFER_DEVID}"
-                  f" {'FP16' if _INFER_HALF else 'FP32'}")
+            print(f"[sign_detector] CUDA — inference on cuda:{_INFER_DEVID} FP32")
         else:
-            _INFER_HALF  = False
             _INFER_DEVID = "cpu"
             torch.set_num_threads(os.cpu_count() or 4)
             print(f"[sign_detector] CPU mode — threads={torch.get_num_threads()}")
 
-        print(f"[sign_detector] model loaded: {resolved}"
-              f" ({'TensorRT' if using_trt else 'PyTorch'})")
-        print(f"                Classes: {list(_YOLO_MODEL.names.values())}")
-
+        print(f"[sign_detector] model loaded: {model_path}")
         _warmup(_YOLO_MODEL, imgsz=192)
     except Exception as e:
-        import traceback
+        import sys, traceback
         print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
-        traceback.print_exc(file=__import__('sys').stdout)
-        __import__('sys').stdout.flush()
+        traceback.print_exc(file=sys.stdout)
     return _YOLO_MODEL
 
 
@@ -178,9 +143,6 @@ class SignDetectorNode(Node):
     def _default_model_path(self) -> str:
         try:
             share = get_package_share_directory("puzzlebot_challenge")
-            engine = os.path.join(share, "models", "best.engine")
-            if os.path.exists(engine):
-                return engine
             return os.path.join(share, "models", "best.pt")
         except Exception:
             here = os.path.dirname(os.path.abspath(__file__))
