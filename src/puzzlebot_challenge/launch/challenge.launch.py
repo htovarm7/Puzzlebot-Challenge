@@ -13,7 +13,7 @@ Nodos (Jetson):
   7. line_viewer        – debug visual (requiere DISPLAY / ssh -X)
 
 Nodo (Laptop — correr por separado):
-  sign_detector_offload – YOLO en RTX 4060, publica /sign/command vía HTTP al Jetson
+  sign_detector – YOLO en RTX 4060, publica /sign/command vía HTTP al Jetson
 
 Prioridad en control:
   1° /traffic_light  red/yellow → STOP
@@ -24,7 +24,7 @@ Para arrancar en el Jetson:
   ros2 launch puzzlebot_challenge challenge.launch.py
 
 Para arrancar en la laptop (en otra terminal):
-  ros2 run puzzlebot_challenge sign_detector_offload
+  ros2 run puzzlebot_challenge sign_detector
 """
 
 import os
@@ -100,7 +100,7 @@ def generate_launch_description():
         ),
 
         # ── API HTTP: bridge para /sign/command desde la laptop ──────────
-        # La laptop corre sign_detector_offload (YOLO) y hace POST aquí
+        # La laptop corre sign_detector (YOLO) y hace POST aquí
         # POST http://<JETSON_IP>:8081/sign  {"command": "turn_left"}
         Node(
             package='puzzlebot_challenge',

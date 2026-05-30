@@ -8,10 +8,6 @@ Tópicos publicados:
   /vision/signs   (sensor_msgs/Image) — frame anotado
 """
 
-# ── Fix: TLS block en Jetson + ROS2 ──────────────────────────────────────────
-# rclpy carga muchas .so que agotan el TLS estático antes de que torch pueda
-# reservar su bloque para libgomp.  Cargamos libgomp con ctypes AQUÍ, antes de
-# cualquier import de rclpy, para que llegue primero al TLS.
 import ctypes as _ctypes
 import glob as _glob
 import os as _os
@@ -140,26 +136,23 @@ _SENSOR_QOS = QoSProfile(
 )
 
 
-class SignDetectorOffloadNode(Node):
+class SignDetectorNode(Node):
 
     def __init__(self):
-        super().__init__("sign_detector_offload")
+        super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("jetson_api",     "http://100.73.89.116:8081/sign")
 
         image_topic = self.get_parameter("image_topic").value
         self._conf  = float(self.get_parameter("conf_threshold").value)
         self._imgsz = int(self.get_parameter("imgsz").value)
         model_path  = self.get_parameter("model_path").value
 
-        self._bridge      = CvBridge()
-        self._model       = _get_model(model_path)
-        self._jetson_api  = self.get_parameter("jetson_api").value
-        self._last_posted = "none"
+        self._bridge = CvBridge()
+        self._model  = _get_model(model_path)
 
         self._pending_frame  = None
         self._latest_dets    = []
@@ -211,20 +204,6 @@ class SignDetectorOffloadNode(Node):
         self.pub_detected.publish(d_msg)
         self._publish_debug(frame, dets, command)
 
-        if command != self._last_posted:
-            self._post_sign(command)
-
-    def _post_sign(self, command: str):
-        self._last_posted = command
-        if not self._jetson_api:
-            return
-        try:
-            import requests
-            requests.post(self._jetson_api,
-                          json={"command": command}, timeout=0.2)
-        except Exception:
-            pass
-
     def _detection_loop(self):
         while self._running:
             with self._lock:
@@ -267,7 +246,7 @@ class SignDetectorOffloadNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SignDetectorOffloadNode()
+    node = SignDetectorNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -170,13 +170,12 @@ def generate_launch_description():
     #   Publica:  /sign/command, /sign/detected, /vision/signs (debug)
     sign_detector = Node(
         package='puzzlebot_challenge',
-        executable='sign_detector_offload',
+        executable='sign_detector',
         name='sign_detector',
         parameters=[{
             'image_topic':    '/camera/image_raw',
             'conf_threshold': LaunchConfiguration('conf_threshold'),
             'imgsz':          LaunchConfiguration('imgsz'),
-            'jetson_api':     '',   # vacío = no hace HTTP POST (todo es local)
         }],
         output='screen',
     )
