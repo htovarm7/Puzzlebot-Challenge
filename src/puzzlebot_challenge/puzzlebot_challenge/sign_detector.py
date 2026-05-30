@@ -180,6 +180,9 @@ class SignDetectorNode(Node):
         self._publish_debug(frame, dets, command)
 
     def _detection_loop(self):
+        last_status_t = time.monotonic()
+        frames_processed = 0
+
         while self._running:
             with self._lock:
                 frame = self._pending_frame
@@ -187,11 +190,22 @@ class SignDetectorNode(Node):
 
             if frame is None:
                 time.sleep(0.005)
+                now = time.monotonic()
+                if now - last_status_t >= 5.0:
+                    self.get_logger().info(
+                        f"[detection_loop] esperando frames... procesados={frames_processed}")
+                    last_status_t = now
                 continue
 
-            final_dets = yolo_detect(frame, self._model,
-                                     conf_thr=self._conf,
-                                     imgsz=self._imgsz)
+            try:
+                final_dets = yolo_detect(frame, self._model,
+                                         conf_thr=self._conf,
+                                         imgsz=self._imgsz)
+            except Exception as e:
+                self.get_logger().error(f"[detection_loop] YOLO falló: {e}")
+                continue
+
+            frames_processed += 1
 
             if final_dets:
                 best    = max(final_dets, key=lambda d: d[3] * d[4])
@@ -201,6 +215,11 @@ class SignDetectorNode(Node):
                     f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
             else:
                 command = "none"
+                now = time.monotonic()
+                if now - last_status_t >= 5.0:
+                    self.get_logger().info(
+                        f"[detection_loop] nada detectado | frames={frames_processed}")
+                    last_status_t = now
 
             with self._lock:
                 self._latest_dets    = final_dets
