@@ -10,7 +10,6 @@ Tópicos publicados:
 
 import ctypes
 import os
-import threading
 import time
 
 # Preload libgomp globally before torch is imported — required on Jetson aarch64
@@ -144,7 +143,8 @@ class SignDetectorNode(Node):
         self._pending_frame  = None
         self._latest_dets    = []
         self._latest_command = "none"
-        self._lock           = threading.Lock()
+        self._frames_processed = 0
+        self._last_status_t    = time.monotonic()
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, _SENSOR_QOS)
@@ -153,9 +153,8 @@ class SignDetectorNode(Node):
         self.pub_detected = self.create_publisher(Bool,   "/sign/detected", 10)
         self.pub_debug    = self.create_publisher(Image,  "/vision/signs",  10)
 
-        self._running    = True
-        self._det_thread = threading.Thread(target=self._detection_loop, daemon=True)
-        self._det_thread.start()
+        # Timer runs inference in the main ROS thread so CUDA context is available.
+        self.create_timer(0.05, self._detection_tick)
 
         self.get_logger().info(
             f"SignDetector | topic={image_topic} | "
@@ -176,63 +175,51 @@ class SignDetectorNode(Node):
         except Exception as e:
             self.get_logger().warn(f"Image conversion failed: {e}")
             return
+        self._pending_frame = frame.copy()
 
-        with self._lock:
-            self._pending_frame = frame.copy()
-            dets    = list(self._latest_dets)
-            command = self._latest_command
+    def _detection_tick(self):
+        frame = self._pending_frame
+        if frame is None:
+            now = time.monotonic()
+            if now - self._last_status_t >= 5.0:
+                self.get_logger().info(
+                    f"[detector] esperando frames... procesados={self._frames_processed}")
+                self._last_status_t = now
+            return
+        self._pending_frame = None
+
+        try:
+            final_dets = yolo_detect(frame, self._model,
+                                     conf_thr=self._conf,
+                                     imgsz=self._imgsz)
+        except Exception as e:
+            self.get_logger().error(f"[detector] YOLO falló: {e}")
+            return
+
+        self._frames_processed += 1
+
+        if final_dets:
+            best    = max(final_dets, key=lambda d: d[3] * d[4])
+            command = best[0]
+            self.get_logger().info(
+                f"DETECTED: {command.upper()} "
+                f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
+        else:
+            command = "none"
+            now = time.monotonic()
+            if now - self._last_status_t >= 5.0:
+                self.get_logger().info(
+                    f"[detector] nada detectado | frames={self._frames_processed}")
+                self._last_status_t = now
+
+        self._latest_dets    = final_dets
+        self._latest_command = command
 
         c_msg = String(); c_msg.data = command
         d_msg = Bool();   d_msg.data = (command != "none")
         self.pub_command.publish(c_msg)
         self.pub_detected.publish(d_msg)
-        self._publish_debug(frame, dets, command)
-
-    def _detection_loop(self):
-        last_status_t = time.monotonic()
-        frames_processed = 0
-
-        while self._running:
-            with self._lock:
-                frame = self._pending_frame
-                self._pending_frame = None
-
-            if frame is None:
-                time.sleep(0.005)
-                now = time.monotonic()
-                if now - last_status_t >= 5.0:
-                    self.get_logger().info(
-                        f"[detection_loop] esperando frames... procesados={frames_processed}")
-                    last_status_t = now
-                continue
-
-            try:
-                final_dets = yolo_detect(frame, self._model,
-                                         conf_thr=self._conf,
-                                         imgsz=self._imgsz)
-            except Exception as e:
-                self.get_logger().error(f"[detection_loop] YOLO falló: {e}")
-                continue
-
-            frames_processed += 1
-
-            if final_dets:
-                best    = max(final_dets, key=lambda d: d[3] * d[4])
-                command = best[0]
-                self.get_logger().info(
-                    f"DETECTED: {command.upper()} "
-                    f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
-            else:
-                command = "none"
-                now = time.monotonic()
-                if now - last_status_t >= 5.0:
-                    self.get_logger().info(
-                        f"[detection_loop] nada detectado | frames={frames_processed}")
-                    last_status_t = now
-
-            with self._lock:
-                self._latest_dets    = final_dets
-                self._latest_command = command
+        self._publish_debug(frame, final_dets, command)
 
     def _publish_debug(self, frame, dets, command):
         if self.pub_debug.get_subscription_count() == 0:
@@ -243,7 +230,6 @@ class SignDetectorNode(Node):
         self.pub_debug.publish(out_msg)
 
     def destroy_node(self):
-        self._running = False
         super().destroy_node()
 
 
