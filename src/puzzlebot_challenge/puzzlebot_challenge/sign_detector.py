@@ -94,8 +94,9 @@ _LABEL_NORM = {
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
-    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
+    results = model.predict(frame, verbose=True, conf=conf_thr, imgsz=imgsz,
                             device=_INFER_DEVID, half=_INFER_HALF)[0]
+    print(f"[yolo_detect] boxes={len(results.boxes)} device={_INFER_DEVID}", flush=True)
     dets = []
     for box in results.boxes:
         raw   = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
