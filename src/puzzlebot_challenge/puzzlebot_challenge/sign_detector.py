@@ -55,16 +55,11 @@ def _get_model(model_path: str):
         print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
         _YOLO_MODEL = YOLO(model_path)
 
-        if torch.cuda.is_available():
-            _INFER_DEVID = 0
-            print(f"[sign_detector] CUDA — inference on cuda:{_INFER_DEVID} FP32")
-        else:
-            _INFER_DEVID = "cpu"
-            torch.set_num_threads(os.cpu_count() or 4)
-            print(f"[sign_detector] CPU mode — threads={torch.get_num_threads()}")
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        print(f"[sign_detector] device={device}")
 
         print(f"[sign_detector] model loaded: {model_path}")
-        _warmup(_YOLO_MODEL, imgsz=192)
+        _warmup(_YOLO_MODEL, imgsz=320)
     except Exception as e:
         import sys, traceback
         print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
@@ -75,8 +70,7 @@ def _get_model(model_path: str):
 def _warmup(model, imgsz: int = 192):
     dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
     try:
-        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz,
-                      device=_INFER_DEVID, half=_INFER_HALF)
+        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz)
         print("[sign_detector] model warmup done")
     except Exception as e:
         print(f"[sign_detector] warmup skipped: {e}")
@@ -93,8 +87,7 @@ _LABEL_NORM = {
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
-    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
-                            device=_INFER_DEVID, half=_INFER_HALF)[0]
+    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz)[0]
     dets = []
     for box in results.boxes:
         raw   = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
