@@ -3,7 +3,7 @@
 sign_detector.py — Detecta señales de tránsito con YOLO.
 
 Tópicos publicados:
-  /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
+  /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | give_way | workers | traffic_light_green | traffic_light_red | traffic_light_yellow | none
   /sign/detected  (std_msgs/Bool)    — True si hay señal activa
   /vision/signs   (sensor_msgs/Image) — frame anotado
 """
@@ -83,6 +83,14 @@ def _warmup(model, imgsz: int = 192):
         print(f"[sign_detector] warmup skipped: {e}")
 
 
+_LABEL_NORM = {
+    "away":     "give_way",
+    "straight": "go_straight",
+    "left":     "turn_left",
+    "right":    "turn_right",
+}
+
+
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
@@ -90,7 +98,8 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 3
                             device=_INFER_DEVID, half=_INFER_HALF)[0]
     dets = []
     for box in results.boxes:
-        label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
+        raw   = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
+        label = _LABEL_NORM.get(raw, raw)
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
