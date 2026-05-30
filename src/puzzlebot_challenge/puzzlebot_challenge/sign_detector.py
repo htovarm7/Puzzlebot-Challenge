@@ -140,11 +140,10 @@ class SignDetectorNode(Node):
         self._bridge = CvBridge()
         self._model  = _get_model(model_path)
 
-        self._pending_frame  = None
+        self._frame_count    = 0
         self._latest_dets    = []
         self._latest_command = "none"
-        self._frames_processed = 0
-        self._last_status_t    = time.monotonic()
+        self._last_status_t  = time.monotonic()
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, _SENSOR_QOS)
@@ -152,9 +151,6 @@ class SignDetectorNode(Node):
         self.pub_command  = self.create_publisher(String, "/sign/command",  10)
         self.pub_detected = self.create_publisher(Bool,   "/sign/detected", 10)
         self.pub_debug    = self.create_publisher(Image,  "/vision/signs",  10)
-
-        # Timer runs inference in the main ROS thread so CUDA context is available.
-        self.create_timer(0.05, self._detection_tick)
 
         self.get_logger().info(
             f"SignDetector | topic={image_topic} | "
@@ -175,18 +171,15 @@ class SignDetectorNode(Node):
         except Exception as e:
             self.get_logger().warn(f"Image conversion failed: {e}")
             return
-        self._pending_frame = frame.copy()
 
-    def _detection_tick(self):
-        frame = self._pending_frame
-        if frame is None:
-            now = time.monotonic()
-            if now - self._last_status_t >= 5.0:
-                self.get_logger().info(
-                    f"[detector] esperando frames... procesados={self._frames_processed}")
-                self._last_status_t = now
+        self._frame_count += 1
+        # Process every 3rd frame to keep ~10 fps inference on Jetson CUDA
+        if self._frame_count % 3 != 0:
+            c_msg = String(); c_msg.data = self._latest_command
+            d_msg = Bool();   d_msg.data = (self._latest_command != "none")
+            self.pub_command.publish(c_msg)
+            self.pub_detected.publish(d_msg)
             return
-        self._pending_frame = None
 
         try:
             final_dets = yolo_detect(frame, self._model,
@@ -195,8 +188,6 @@ class SignDetectorNode(Node):
         except Exception as e:
             self.get_logger().error(f"[detector] YOLO falló: {e}")
             return
-
-        self._frames_processed += 1
 
         if final_dets:
             best    = max(final_dets, key=lambda d: d[3] * d[4])
@@ -208,8 +199,7 @@ class SignDetectorNode(Node):
             command = "none"
             now = time.monotonic()
             if now - self._last_status_t >= 5.0:
-                self.get_logger().info(
-                    f"[detector] nada detectado | frames={self._frames_processed}")
+                self.get_logger().info(f"[detector] nada detectado | frame={self._frame_count}")
                 self._last_status_t = now
 
         self._latest_dets    = final_dets
