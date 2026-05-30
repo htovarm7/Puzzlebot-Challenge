@@ -55,15 +55,17 @@ def _find_libgomp() -> str:
     if 'libgomp' in existing:
         return existing
 
-    try:
-        out = subprocess.check_output(
-            'find /home /usr /opt -name "libgomp*.so*" -path "*/torch*" 2>/dev/null | head -1',
-            shell=True, text=True, timeout=5,
-        ).strip()
-        if out:
-            return out
-    except Exception:
-        pass
+    # Busca primero en torch (evita mezclar versiones), luego cae al sistema
+    for search_cmd in (
+        'find /home /usr /opt -name "libgomp*.so*" -path "*/torch*" 2>/dev/null | head -1',
+        'find /usr/lib -name "libgomp.so.1" 2>/dev/null | head -1',
+    ):
+        try:
+            out = subprocess.check_output(search_cmd, shell=True, text=True, timeout=5).strip()
+            if out:
+                return out
+        except Exception:
+            pass
     return ''
 
 

@@ -8,9 +8,22 @@ Tópicos publicados:
   /vision/signs   (sensor_msgs/Image) — frame anotado
 """
 
+import ctypes
 import os
 import threading
 import time
+
+# Preload libgomp globally before torch is imported — required on Jetson aarch64
+# to avoid "cannot allocate memory in static TLS block" at runtime.
+for _gomp in (
+    '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
+    'libgomp.so.1',
+):
+    try:
+        ctypes.CDLL(_gomp, mode=ctypes.RTLD_GLOBAL)
+        break
+    except OSError:
+        pass
 
 import cv2
 import numpy as np
