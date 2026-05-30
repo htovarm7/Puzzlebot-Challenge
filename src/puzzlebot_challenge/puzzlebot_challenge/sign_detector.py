@@ -56,13 +56,12 @@ def _get_model(model_path: str):
         print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
         _YOLO_MODEL = YOLO(model_path)
 
-        if torch.cuda.is_available():
-            _INFER_DEVID = 0
-            print(f"[sign_detector] CUDA — inference on cuda:{_INFER_DEVID} FP32")
-        else:
-            _INFER_DEVID = "cpu"
-            torch.set_num_threads(os.cpu_count() or 4)
-            print(f"[sign_detector] CPU mode — threads={torch.get_num_threads()}")
+        # Inference runs in a background thread; CUDA context is not shared across
+        # threads in PyTorch 1.13 on Jetson, so force CPU to avoid silent empty results.
+        _INFER_DEVID = "cpu"
+        torch.set_num_threads(os.cpu_count() or 4)
+        cuda_info = "available" if torch.cuda.is_available() else "not available"
+        print(f"[sign_detector] CPU mode (CUDA {cuda_info}) — threads={torch.get_num_threads()}")
 
         print(f"[sign_detector] model loaded: {model_path}")
         _warmup(_YOLO_MODEL, imgsz=192)
@@ -94,9 +93,8 @@ _LABEL_NORM = {
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
-    results = model.predict(frame, verbose=True, conf=conf_thr, imgsz=imgsz,
+    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
                             device=_INFER_DEVID, half=_INFER_HALF)[0]
-    print(f"[yolo_detect] boxes={len(results.boxes)} device={_INFER_DEVID}", flush=True)
     dets = []
     for box in results.boxes:
         raw   = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
