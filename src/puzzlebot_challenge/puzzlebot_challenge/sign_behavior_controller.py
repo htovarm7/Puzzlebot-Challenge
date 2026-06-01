@@ -11,12 +11,12 @@ Arquitectura de tópicos:
   este nodo      → /VelocitySetL, /VelocitySetR              (salida final)
 
 Comportamientos:
-  give_way    → detenerse 2 s en cuanto se ve la señal, luego continuar
+  give_way    → sigue la línea mientras ve la señal; al perderla, para 2 s y continúa
   stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
   workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
-  turn_left   → al DEJAR de ver la señal, girar a la izquierda
-  turn_right  → al DEJAR de ver la señal, girar a la derecha
-  go_straight → al DEJAR de ver la señal, avanzar recto un tiempo fijo
+  turn_left   → al DEJAR de ver la señal, girar a la izquierda en la intersección
+  turn_right  → al DEJAR de ver la señal, girar a la derecha en la intersección
+  go_straight → al DEJAR de ver la señal, avanzar recto siguiendo la línea
 """
 
 import rclpy
@@ -42,19 +42,20 @@ SIGN_COOLDOWN      = 4.0   # s — cooldown antes de re-disparar el mismo comand
 CTRL_DT            = 0.05  # s — ciclo del bucle de control (20 Hz)
 
 # ── Identificadores de estado ─────────────────────────────────────────────────
-S_IDLE             = "IDLE"
-S_GIVE_WAY         = "GIVE_WAY"
-S_STOP             = "STOP"
-S_STOP_HOLD        = "STOP_HOLD"
-S_WORKERS          = "WORKERS"
-S_PENDING_LEFT     = "PENDING_LEFT"
-S_PENDING_RIGHT    = "PENDING_RIGHT"
-S_PENDING_STRAIGHT = "PENDING_STRAIGHT"
-S_APPROACH_LEFT    = "APPROACH_LEFT"
-S_APPROACH_RIGHT   = "APPROACH_RIGHT"
-S_TURNING_LEFT     = "TURNING_LEFT"
-S_TURNING_RIGHT    = "TURNING_RIGHT"
-S_GOING_STRAIGHT   = "GOING_STRAIGHT"
+S_IDLE              = "IDLE"
+S_PENDING_GIVE_WAY  = "PENDING_GIVE_WAY"   # sigue línea mientras ve la señal
+S_GIVE_WAY          = "GIVE_WAY"           # para 2 s tras perder la señal
+S_STOP              = "STOP"
+S_STOP_HOLD         = "STOP_HOLD"
+S_WORKERS           = "WORKERS"
+S_PENDING_LEFT      = "PENDING_LEFT"
+S_PENDING_RIGHT     = "PENDING_RIGHT"
+S_PENDING_STRAIGHT  = "PENDING_STRAIGHT"
+S_APPROACH_LEFT     = "APPROACH_LEFT"
+S_APPROACH_RIGHT    = "APPROACH_RIGHT"
+S_TURNING_LEFT      = "TURNING_LEFT"
+S_TURNING_RIGHT     = "TURNING_RIGHT"
+S_GOING_STRAIGHT    = "GOING_STRAIGHT"
 
 
 def unicycle_to_wheels(v: float, omega: float):
@@ -173,7 +174,7 @@ class SignBehaviorController(Node):
         if self._state == S_IDLE:
             if rising and not self._in_cooldown(cmd):
                 if cmd == "give_way":
-                    self._enter(S_GIVE_WAY, cmd)
+                    self._enter(S_PENDING_GIVE_WAY, cmd)   # acercarse primero
                 elif cmd == "stop":
                     self._enter(S_STOP, cmd)
                 elif cmd == "workers":
@@ -186,7 +187,14 @@ class SignBehaviorController(Node):
                     self._enter(S_PENDING_STRAIGHT, cmd)
             self._passthrough()
 
-        # ── GIVE_WAY: para 2 s, luego continúa ────────────────────────────
+        # ── PENDING_GIVE_WAY: sigue línea mientras ve la señal ─────────────
+        elif self._state == S_PENDING_GIVE_WAY:
+            if falling:
+                self._enter(S_GIVE_WAY)   # perdió la señal → para 2 s
+            else:
+                self._passthrough()
+
+        # ── GIVE_WAY: para 2 s tras perder la señal, luego continúa ───────
         elif self._state == S_GIVE_WAY:
             if elapsed < gw_time:
                 self._stop()
