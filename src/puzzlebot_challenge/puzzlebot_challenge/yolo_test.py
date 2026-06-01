@@ -73,8 +73,11 @@ if '--export' in sys.argv:
 # ── Carga de modelo ──────────────────────────────────────────────────────────
 print(f'Device: {DEVICE}  |  half={USE_HALF}')
 model = load_model()
-print(f'Clases: {model.names}')
 warmup(model)
+try:
+    print(f'Clases: {model.names}')
+except Exception:
+    pass
 
 # ── Modo imagen estática ─────────────────────────────────────────────────────
 if len(sys.argv) > 1:
