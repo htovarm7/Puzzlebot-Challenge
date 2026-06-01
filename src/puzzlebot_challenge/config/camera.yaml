@@ -1,12 +1,12 @@
 picam_publisher:
   ros__parameters:
-    sensor_mode: 2
-    src_width: 1920
-    src_height: 1080
-    src_fps: 30
+    sensor_mode: 4
+    src_width: 1280
+    src_height: 720
+    src_fps: 60
     out_width: 320
-    out_height: 240
-    pub_fps: 30.0
+    out_height: 180
+    pub_fps: 60.0
     topic: /camera/image_raw
     frame_id: picam
 
