@@ -11,7 +11,14 @@ Para exportar a TensorRT antes de correr (hazlo una vez en la Jetson):
 """
 
 import ctypes
-ctypes.CDLL('/usr/lib/aarch64-linux-gnu/libgomp.so.1', mode=ctypes.RTLD_GLOBAL)
+for _lib in (
+    '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
+    '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
+):
+    try:
+        ctypes.CDLL(_lib, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass
 
 import sys
 import os
