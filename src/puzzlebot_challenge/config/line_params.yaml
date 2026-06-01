@@ -1,9 +1,12 @@
-T_init: 185
-T_min: 127
-T_max: 148
-dark_min: 0.0
-dark_max: 0.1
+T_init: 80
+T_min: 45
+T_max: 110
+dark_min: 1.0
+dark_max: 15.0
 roi_top: 0.84
 min_area: 218
 blur: 11
 morph: 12
+adaptive: 1
+adapt_block: 61
+adapt_c: 12

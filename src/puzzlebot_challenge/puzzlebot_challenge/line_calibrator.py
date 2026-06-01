@@ -29,10 +29,10 @@ DEFAULTS = {
     "T_init":       185,
     "T_min":        127,
     "T_max":        222,
-    "dark_min_x10": 20,
-    "dark_max_x10": 24,
-    "roi_top_x100": 68,
-    "min_area":     3753,
+    "dark_min_x10": 10,   # 1.0 %
+    "dark_max_x10": 60,   # 6.0 %
+    "roi_top_x100": 60,   # 60 %
+    "min_area":     300,
     "blur":         21,
     "morph":        9,
     "turn_angle":   36,
@@ -50,21 +50,46 @@ def nothing(_):
     pass
 
 
-def build_window():
+def _load_saved(yaml_path: Path) -> dict:
+    """Load previously saved params from YAML and convert back to trackbar units."""
+    init = dict(DEFAULTS)
+    if not yaml_path.exists():
+        return init
+    try:
+        with open(yaml_path) as f:
+            saved = yaml.safe_load(f) or {}
+        if "dark_min" in saved:
+            init["dark_min_x10"] = int(round(saved["dark_min"] * 10))
+        if "dark_max" in saved:
+            init["dark_max_x10"] = int(round(saved["dark_max"] * 10))
+        if "roi_top" in saved:
+            init["roi_top_x100"] = int(round(saved["roi_top"] * 100))
+        for key in ("T_init", "T_min", "T_max", "min_area", "blur", "morph"):
+            if key in saved:
+                init[key] = int(saved[key])
+        print(f"[calibrator] Parámetros cargados desde {yaml_path}")
+    except Exception as e:
+        print(f"[calibrator] No se pudo cargar YAML: {e}")
+    return init
+
+
+def build_window(yaml_path: Path | None = None):
+    init = _load_saved(yaml_path) if yaml_path else dict(DEFAULTS)
+
     cv.namedWindow(WIN_CTRL, cv.WINDOW_NORMAL)
     cv.resizeWindow(WIN_CTRL, 460, 520)
 
-    cv.createTrackbar("T init",        WIN_CTRL, DEFAULTS["T_init"],       255, nothing)
-    cv.createTrackbar("T min",         WIN_CTRL, DEFAULTS["T_min"],        255, nothing)
-    cv.createTrackbar("T max",         WIN_CTRL, DEFAULTS["T_max"],        255, nothing)
-    cv.createTrackbar("dark% min x10", WIN_CTRL, DEFAULTS["dark_min_x10"], 500, nothing)
-    cv.createTrackbar("dark% max x10", WIN_CTRL, DEFAULTS["dark_max_x10"], 500, nothing)
-    cv.createTrackbar("ROI top %",     WIN_CTRL, DEFAULTS["roi_top_x100"],  99, nothing)
-    cv.createTrackbar("min area",      WIN_CTRL, DEFAULTS["min_area"],   5000, nothing)
-    cv.createTrackbar("blur (odd)",    WIN_CTRL, DEFAULTS["blur"],         21, nothing)
-    cv.createTrackbar("morph kernel",  WIN_CTRL, DEFAULTS["morph"],        15, nothing)
-    cv.createTrackbar("turn angle",    WIN_CTRL, DEFAULTS["turn_angle"],   90, nothing)
-    cv.createTrackbar("shift max px",  WIN_CTRL, DEFAULTS["shift_max"],   200, nothing)
+    cv.createTrackbar("T init",        WIN_CTRL, init["T_init"],       255, nothing)
+    cv.createTrackbar("T min",         WIN_CTRL, init["T_min"],        255, nothing)
+    cv.createTrackbar("T max",         WIN_CTRL, init["T_max"],        255, nothing)
+    cv.createTrackbar("dark% min x10", WIN_CTRL, init["dark_min_x10"], 500, nothing)
+    cv.createTrackbar("dark% max x10", WIN_CTRL, init["dark_max_x10"], 500, nothing)
+    cv.createTrackbar("ROI top %",     WIN_CTRL, init["roi_top_x100"],  99, nothing)
+    cv.createTrackbar("min area",      WIN_CTRL, init["min_area"],    5000, nothing)
+    cv.createTrackbar("blur (odd)",    WIN_CTRL, init["blur"],           21, nothing)
+    cv.createTrackbar("morph kernel",  WIN_CTRL, init["morph"],          15, nothing)
+    cv.createTrackbar("turn angle",    WIN_CTRL, init["turn_angle"],     90, nothing)
+    cv.createTrackbar("shift max px",  WIN_CTRL, init["shift_max"],     200, nothing)
 
 
 def reset_window():
@@ -106,10 +131,17 @@ _NODE_KEYS = ("T_init", "T_min", "T_max", "dark_min", "dark_max",
 
 
 def _resolve_default_yaml() -> Path:
-    """Mirror the lookup used by hsv_calibrator: pkg/config/line_params.yaml."""
-    here     = Path(__file__).resolve().parent           # .../puzzlebot_challenge/
-    pkg_root = here.parent                               # src/puzzlebot_challenge/
-    return pkg_root / "config" / "line_params.yaml"
+    """Devuelve la ruta del YAML instalado (la misma que usa el launch).
+    Con --symlink-install el archivo instalado es una copia en build/;
+    al guardar aquí el launch lo lee directamente sin recompilar."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = get_package_share_directory("puzzlebot_challenge")
+        return Path(share) / "config" / "line_params.yaml"
+    except Exception:
+        # Fallback: ruta fuente (útil fuera de ROS)
+        here = Path(__file__).resolve().parent
+        return here.parent / "config" / "line_params.yaml"
 
 
 def save_params(p: dict, out_path: Path):
@@ -190,7 +222,16 @@ def detect(frame, p):
 
     angle = shift = None
     if contours:
-        line = max(contours, key=cv.contourArea)
+        # Keep top-3 largest, then pick the median by X → always the center line
+        contours = sorted(contours, key=cv.contourArea, reverse=True)[:3]
+
+        def _cx(c):
+            m = cv.moments(c)
+            return int(m["m10"] / m["m00"]) if m["m00"] else 0
+
+        contours.sort(key=_cx)
+        line = contours[len(contours) // 2]
+
         rect = cv.minAreaRect(line)
         (cx, cy), _, _ = rect
         box = cv.boxPoints(rect)
@@ -379,8 +420,8 @@ def main():
                     help=f"Archivo YAML de salida (default: {default_yaml})")
     args = ap.parse_args()
 
-    build_window()
     out_path = Path(args.out)
+    build_window(out_path)  # loads saved YAML values into trackbars if file exists
 
     if args.live:
         buf = _LiveFrameBuffer()

@@ -80,6 +80,45 @@ ros2 launch puzzlebot_challenge pid.launch.py task:=WAYPOINTS
 ros2 launch puzzlebot_challenge full.launch.py task:=SQUARE
 ```
 
+### Seguimiento de línea (autónomo)
+
+```bash
+ros2 launch puzzlebot_challenge line_follow.launch.py
+```
+
+Parámetros opcionales:
+
+```bash
+ros2 launch puzzlebot_challenge line_follow.launch.py kp:=1.2 kd:=0.35 v_base:=0.12
+```
+
+Para ver la imagen de debug de visión (requiere display o `ssh -X`):
+
+```bash
+# Se lanza automáticamente como line_viewer dentro del launch
+# Si quieres solo la visión sin movimiento:
+ros2 launch puzzlebot_challenge line.launch.py
+```
+
+### Teleop (control manual)
+
+En una terminal lanza el stack de visión:
+
+```bash
+ros2 launch puzzlebot_challenge line.launch.py
+```
+
+En otra terminal lanza el teleop:
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+> **Nota:** el teleop publica en `/cmd_vel`. Asegúrate de que el `motor_watchdog` no
+> esté corriendo al mismo tiempo o los comandos se pisarán.
+
+---
+
 ### Sintonización de PID
 
 ```bash
@@ -117,9 +156,13 @@ Edita los YAML y vuelve a lanzar — no es necesario `colcon build` si usaste
 
 | Tópico                | Tipo                  | Quién publica       | Quién consume        |
 |-----------------------|-----------------------|---------------------|----------------------|
-| `/camera/image_raw`   | `sensor_msgs/Image`   | `picam_publisher`   | `cam_server`, otros  |
+| `/camera/image_raw`   | `sensor_msgs/Image`   | `picam_publisher`   | `line_detector`, `cam_server` |
+| `/line/shift`         | `std_msgs/Float32`    | `line_detector`     | `line_follower`      |
+| `/line/detected`      | `std_msgs/Bool`       | `line_detector`     | `line_follower`      |
+| `/vision/line`        | `sensor_msgs/Image`   | `line_detector`     | `line_viewer`        |
+| `/cmd/VelocitySetL/R` | `std_msgs/Float32`    | `line_follower`     | `motor_watchdog`     |
+| `/VelocitySetL/R`     | `std_msgs/Float32`    | `motor_watchdog`    | hardware             |
 | `/VelEncL`, `/VelEncR`| `std_msgs/Float32`    | hardware            | `pid_controller`     |
-| `/VelocitySetL/R`     | `std_msgs/Float32`    | `pid_controller`    | hardware             |
 | `/tuner/*`            | `std_msgs/Float32`    | `pid_tuner`         | `rqt_plot`           |
 
 ---

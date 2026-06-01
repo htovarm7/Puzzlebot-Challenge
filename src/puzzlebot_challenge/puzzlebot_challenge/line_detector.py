@@ -27,15 +27,23 @@ from std_msgs.msg import Float32, Bool
 from cv_bridge import CvBridge
 
 _DEFAULT_PARAMS = {
-    "T_init":   185,
-    "T_min":    127,
-    "T_max":    222,
-    "dark_min": 2.0,     
-    "dark_max": 2.4,     
-    "roi_top":  0.68,    
-    "min_area": 3753,    
-    "blur":     21,      
-    "morph":    9,
+    "T_init":      185,
+    "T_min":       127,
+    "T_max":       222,
+    "dark_min":    1.0,
+    "dark_max":    6.0,
+    "roi_top":     0.60,
+    "min_area":    300,
+    "blur":        21,
+    "morph":       9,
+    "n_track_lines": 3,
+    # Intersection detection: min fraction of frame width a horizontal contour must span
+    "intersection_white_frac": 0.55,
+    # Adaptive local threshold mode (1 = on, 0 = classic global)
+    # Needs only adapt_block and adapt_c — no T calibration required.
+    "adaptive":      0,
+    "adapt_block":  61,   # neighborhood size (odd, pixels) — larger = smoother
+    "adapt_c":      12,   # line must be this many units darker than local mean
 }
 
 
@@ -64,6 +72,25 @@ class LineDetection:
             self.params.update(params)
         # Persistent adaptive threshold between frames.
         self._T_state: int = int(self.params["T_init"])
+
+    def _adaptive_roi(self, gray: np.ndarray) -> tuple[np.ndarray, int, int]:
+        """Threshold adaptativo local: no necesita T_min/T_max/dark_min/dark_max.
+        Cada píxel se compara contra el promedio de su vecindad → robusto a
+        cambios de iluminación y color de piso."""
+        p = self.params
+        h = gray.shape[0]
+        y_off = int(h * p["roi_top"])
+
+        block = int(p.get("adapt_block", 61)) | 1   # fuerza impar
+        C     = int(p.get("adapt_c", 12))
+
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            block, C,
+        )
+        return binary[y_off:, :], 0, y_off   # T_used=0 (no aplica)
 
     def _balance(self, gray: np.ndarray) -> tuple[np.ndarray | None, int, int]:
         p = self.params
@@ -112,15 +139,16 @@ class LineDetection:
           top_mid, bottom_mid : tuple (x,y) in global coords for overlay
         """
         out: dict = {
-            "detected":   False,
-            "shift":      0.0,
-            "angle":      90.0,
-            "T_used":     self._T_state,
-            "y_off":      0,
-            "contour":    None,
-            "box":        None,
-            "top_mid":    None,
-            "bottom_mid": None,
+            "detected":     False,
+            "intersection": False,
+            "shift":        0.0,
+            "angle":        90.0,
+            "T_used":       self._T_state,
+            "y_off":        0,
+            "contour":      None,
+            "box":          None,
+            "top_mid":      None,
+            "bottom_mid":   None,
         }
 
         if frame_bgr is None or frame_bgr.size == 0:
@@ -129,14 +157,19 @@ class LineDetection:
         p = self.params
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         if p["blur"] >= 3:
-            k = int(p["blur"]) | 1   
+            k = int(p["blur"]) | 1
             gray = cv2.GaussianBlur(gray, (k, k), 0)
 
-        binary_roi, T_used, y_off = self._balance(gray)
+        if int(p.get("adaptive", 0)):
+            binary_roi, T_used, y_off = self._adaptive_roi(gray)
+        else:
+            binary_roi, T_used, y_off = self._balance(gray)
+            if binary_roi is None:
+                out["y_off"] = y_off
+                return out
+
         out["T_used"] = T_used
         out["y_off"]  = y_off
-        if binary_roi is None:
-            return out
 
         # Morfología
         mk = int(p["morph"])
@@ -151,7 +184,32 @@ class LineDetection:
         if not contours:
             return out
 
-        line = max(contours, key=cv2.contourArea)
+        # Intersection detection: look for a contour whose bounding box is wide
+        # and flat — the crossing/stop line taped perpendicular to travel direction.
+        # Criteria: bounding width > 25% of frame AND width > 2× height.
+        frame_w = binary_roi.shape[1]
+        min_span = float(p.get("intersection_white_frac", 0.55)) * frame_w  # reuse param as span fraction
+        out["intersection"] = any(
+            bw >= min_span and bw >= 2.0 * bh
+            for c in contours
+            for (_, _, bw, bh) in [cv2.boundingRect(c)]
+        )
+
+        # Keep only the N largest blobs — floor artifacts are always smaller than tape
+        n_lines = int(p.get("n_track_lines", 3))
+        if len(contours) > n_lines:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:n_lines]
+
+        # Pick the contour whose centroid is closest to the frame's horizontal centre.
+        # This is more robust than the median when one large off-centre blob
+        # (e.g. a nearby road boundary) skews the sorted order.
+        def _cx(c):
+            m = cv2.moments(c)
+            return int(m["m10"] / m["m00"]) if m["m00"] else 0
+
+        roi_center_x = binary_roi.shape[1] // 2
+        line = min(contours, key=lambda c: abs(_cx(c) - roi_center_x))
+
         rect = cv2.minAreaRect(line)
         (cx, _cy), _, _ = rect
         box = cv2.boxPoints(rect)
@@ -199,7 +257,8 @@ class LineDetectorNode(Node):
 
         for k, v in _DEFAULT_PARAMS.items():
             self.declare_parameter(
-                k, v, ParameterDescriptor(description=f"Param de visión: {k}"))
+                k, float(v) if isinstance(v, float) else v,
+                ParameterDescriptor(description=f"Param de visión: {k}"))
 
         yaml_path = self.get_parameter("params_config").value
         yaml_params = _load_params_yaml(yaml_path)
@@ -219,12 +278,13 @@ class LineDetectorNode(Node):
         self.detector = LineDetection(self._snapshot_params())
 
         image_topic = self.get_parameter("image_topic").value
-        self.sub_img      = self.create_subscription(
+        self.sub_img           = self.create_subscription(
             Image, image_topic, self._on_image, 10)
-        self.pub_shift    = self.create_publisher(Float32, "/line/shift",    10)
-        self.pub_angle    = self.create_publisher(Float32, "/line/angle",    10)
-        self.pub_detected = self.create_publisher(Bool,    "/line/detected", 10)
-        self.pub_debug    = self.create_publisher(Image,   "/vision/line",   10)
+        self.pub_shift         = self.create_publisher(Float32, "/line/shift",        10)
+        self.pub_angle         = self.create_publisher(Float32, "/line/angle",        10)
+        self.pub_detected      = self.create_publisher(Bool,    "/line/detected",     10)
+        self.pub_intersection  = self.create_publisher(Bool,    "/line/intersection", 10)
+        self.pub_debug         = self.create_publisher(Image,   "/vision/line",       10)
 
         self.get_logger().info(
             f"LineDetectorNode listo | topic={image_topic} | "
@@ -253,16 +313,15 @@ class LineDetectorNode(Node):
         s_msg = Float32(); s_msg.data = result["shift"]
         a_msg = Float32(); a_msg.data = result["angle"]
         d_msg = Bool();    d_msg.data = result["detected"]
+        i_msg = Bool();    i_msg.data = result["intersection"]
         self.pub_shift.publish(s_msg)
         self.pub_angle.publish(a_msg)
         self.pub_detected.publish(d_msg)
+        self.pub_intersection.publish(i_msg)
 
         self._publish_debug(frame, result)
 
     def _publish_debug(self, frame: np.ndarray, r: dict):
-        if self.pub_debug.get_subscription_count() == 0:
-            return
-
         vis = frame.copy()
         y_off = r["y_off"]
 
@@ -274,9 +333,10 @@ class LineDetectorNode(Node):
             cv2.drawContours(vis, [r["contour"]], -1, (0, 255, 0), 2)
             cv2.drawContours(vis, [r["box"]],     0, (255, 0, 255), 1)
             cv2.line(vis, r["top_mid"], r["bottom_mid"], (0, 0, 255), 3)
+            intr_tag = "  [INTERSECCION]" if r["intersection"] else ""
             hud = (f"T={r['T_used']}  angle={r['angle']:5.1f}  "
-                   f"shift={r['shift']:+.0f}")
-            color = (255, 255, 255)
+                   f"shift={r['shift']:+.0f}{intr_tag}")
+            color = (0, 255, 255) if r["intersection"] else (255, 255, 255)
         else:
             hud = f"T={r['T_used']}  NO LINE"
             color = (0, 165, 255)
