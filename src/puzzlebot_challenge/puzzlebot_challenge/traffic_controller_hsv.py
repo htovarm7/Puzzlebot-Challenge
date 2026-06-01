@@ -78,11 +78,47 @@ class TrafficLightDetection:
     """Testeable independientemente de ROS con cualquier imagen BGR."""
 
     def __init__(self, min_area: int = 150, min_circularity: float = 0.60,
-                 roi_fraction: float = 1.0, hsv_ranges: dict | None = None):
-        self.min_area        = min_area
-        self.min_circularity = min_circularity
-        self.roi_fraction    = roi_fraction
-        self.hsv_ranges      = hsv_ranges if hsv_ranges is not None else _DEFAULT_RANGOS_HSV
+                 roi_fraction: float = 1.0, hsv_ranges: dict | None = None,
+                 require_housing: bool = True,
+                 housing_dark_thr: int = 70, housing_dark_frac: float = 0.30):
+        self.min_area         = min_area
+        self.min_circularity  = min_circularity
+        self.roi_fraction     = roi_fraction
+        self.hsv_ranges       = hsv_ranges if hsv_ranges is not None else _DEFAULT_RANGOS_HSV
+        self.require_housing  = require_housing
+        self.housing_dark_thr = housing_dark_thr    # V < este valor = píxel oscuro
+        self.housing_dark_frac = housing_dark_frac  # fracción mínima de oscuro alrededor
+
+    def _has_dark_surround(self, hsv: np.ndarray, center: tuple, area: float) -> bool:
+        """
+        Verifica que el blob de color esté rodeado de píxeles oscuros (carcasa del semáforo).
+        Examina un anillo alrededor del blob y comprueba que al menos housing_dark_frac
+        de esos píxeles tengan brillo (canal V) por debajo de housing_dark_thr.
+        """
+        if center is None or area <= 0:
+            return False
+        cx, cy  = center
+        h, w    = hsv.shape[:2]
+        r       = max(3, int(np.sqrt(area / np.pi)))
+        r_inner = int(r * 1.15)
+        r_outer = r_inner + max(6, int(r * 0.7))
+
+        y1, y2 = max(0, cy - r_outer), min(h, cy + r_outer)
+        x1, x2 = max(0, cx - r_outer), min(w, cx + r_outer)
+        patch   = hsv[y1:y2, x1:x2]
+        if patch.size == 0:
+            return False
+
+        ys, xs  = np.mgrid[y1:y2, x1:x2]
+        dist2   = (xs - cx) ** 2 + (ys - cy) ** 2
+        ph, pw  = patch.shape[:2]
+        ring    = (dist2[:ph, :pw] >= r_inner ** 2) & (dist2[:ph, :pw] <= r_outer ** 2)
+
+        ring_v  = patch[:, :, 2][ring]   # canal V del HSV
+        if len(ring_v) == 0:
+            return False
+        dark_ratio = float(np.sum(ring_v < self.housing_dark_thr)) / len(ring_v)
+        return dark_ratio >= self.housing_dark_frac
 
     @staticmethod
     def _best_circle_score(mask: np.ndarray) -> tuple[float, float, tuple]:
@@ -135,11 +171,19 @@ class TrafficLightDetection:
             circ, area, center = self._best_circle_score(mask)
             scores[color] = {"circularity": circ, "area": area, "center": center}
 
-        # A color qualifies only if its best blob is large enough AND round enough
+        # Un color es válido si su blob es suficientemente grande Y circular
         valid = {
             c: s for c, s in scores.items()
             if s["area"] >= self.min_area and s["circularity"] >= self.min_circularity
         }
+
+        # Si require_housing=True, descarta colores cuyo blob NO esté rodeado de
+        # píxeles oscuros (= no hay carcasa de semáforo alrededor → falso positivo)
+        if self.require_housing and valid:
+            valid = {
+                c: s for c, s in valid.items()
+                if self._has_dark_surround(hsv, s["center"], s["area"])
+            }
 
         if not valid:
             return "none", scores
@@ -176,6 +220,15 @@ class TrafficLightNode(Node):
         self.declare_parameter(
             "hsv_config", "",
             ParameterDescriptor(description="Ruta al YAML de calibración HSV (traffic_hsv.yaml)"))
+        self.declare_parameter(
+            "require_housing", True,
+            ParameterDescriptor(description="True = exige carcasa oscura alrededor del blob (evita falsos positivos)"))
+        self.declare_parameter(
+            "housing_dark_thr", 70,
+            ParameterDescriptor(description="Umbral V (0-255) para considerar píxel oscuro en la carcasa"))
+        self.declare_parameter(
+            "housing_dark_frac", 0.30,
+            ParameterDescriptor(description="Fracción mínima de píxeles oscuros en el anillo alrededor del blob"))
 
         hsv_path   = self.get_parameter("hsv_config").value
         hsv_ranges = _load_hsv_yaml(hsv_path)
@@ -188,10 +241,13 @@ class TrafficLightNode(Node):
 
         self.bridge   = CvBridge()
         self.detector = TrafficLightDetection(
-            min_area        = self.get_parameter("min_area").value,
-            min_circularity = self.get_parameter("min_circularity").value,
-            roi_fraction    = self.get_parameter("roi_fraction").value,
-            hsv_ranges      = hsv_ranges,
+            min_area         = self.get_parameter("min_area").value,
+            min_circularity  = self.get_parameter("min_circularity").value,
+            roi_fraction     = self.get_parameter("roi_fraction").value,
+            hsv_ranges       = hsv_ranges,
+            require_housing  = self.get_parameter("require_housing").value,
+            housing_dark_thr = self.get_parameter("housing_dark_thr").value,
+            housing_dark_frac= self.get_parameter("housing_dark_frac").value,
         )
 
         image_topic      = self.get_parameter("image_topic").value
@@ -216,11 +272,14 @@ class TrafficLightNode(Node):
 
     # ── Callback de cámara ────────────────────────────────────────────────────
     def _on_image(self, msg: Image):
-        self.detector.min_area        = self.get_parameter("min_area").value
-        self.detector.min_circularity = self.get_parameter("min_circularity").value
-        self.detector.roi_fraction    = self.get_parameter("roi_fraction").value
-        stable_frames                 = self.get_parameter("stable_frames").value
-        none_frames                   = self.get_parameter("none_frames").value
+        self.detector.min_area          = self.get_parameter("min_area").value
+        self.detector.min_circularity   = self.get_parameter("min_circularity").value
+        self.detector.roi_fraction      = self.get_parameter("roi_fraction").value
+        self.detector.require_housing   = self.get_parameter("require_housing").value
+        self.detector.housing_dark_thr  = self.get_parameter("housing_dark_thr").value
+        self.detector.housing_dark_frac = self.get_parameter("housing_dark_frac").value
+        stable_frames                   = self.get_parameter("stable_frames").value
+        none_frames                     = self.get_parameter("none_frames").value
 
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
