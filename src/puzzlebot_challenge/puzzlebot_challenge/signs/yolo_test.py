@@ -28,7 +28,6 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-# ── Configuración ────────────────────────────────────────────────────────────
 MODEL_PT     = '/home/puzzlebot/Puzzlebot-Challenge/install/puzzlebot_challenge/share/puzzlebot_challenge/models/best.pt'
 MODEL_ENGINE = MODEL_PT.replace('.pt', '.engine')
 CONF         = 0.45
@@ -36,7 +35,6 @@ IMGSZ        = 256
 DEVICE       = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 USE_HALF     = torch.cuda.is_available()   # FP16 solo en GPU
 
-# sensor-mode=4: 1280x720 @ 60fps — permite que la inferencia (~39fps) sea el cuello de botella
 GSTREAMER = (
     'nvarguscamerasrc sensor-mode=4 ! '
     'video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=60/1 ! '

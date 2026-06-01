@@ -25,20 +25,25 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'picam_publisher  = puzzlebot_challenge.picam_publisher:main',
-            'cam_server       = puzzlebot_challenge.cam_server:main',
-            'pid_controller   = puzzlebot_challenge.pid_controller:main',
-            'pid_tuner        = puzzlebot_challenge.pid_tuner:main',
-            'hsv_calibrator   = puzzlebot_challenge.hsv_calibrator:main',
-            'traffic_detector = puzzlebot_challenge.traffic_controller_hsv:main',
-            'line_detector    = puzzlebot_challenge.line_detector:main',
-            'line_calibrator  = puzzlebot_challenge.line_calibrator:main',
-            'line_follower    = puzzlebot_challenge.line_follower:main',
-            'teleop           = puzzlebot_challenge.teleop:main',
-            'motor_watchdog   = puzzlebot_challenge.motor_watchdog:main',
-            'line_viewer      = puzzlebot_challenge.line_viewer:main',
-            'sign_detector = puzzlebot_challenge.sign_detector:main',
-            'sign_behavior_controller   = puzzlebot_challenge.sign_behavior_controller:main',
+            # camera
+            'picam_publisher  = puzzlebot_challenge.camera.picam_publisher:main',
+            'cam_server       = puzzlebot_challenge.camera.cam_server:main',
+            # line
+            'line_detector    = puzzlebot_challenge.line.line_detector:main',
+            'line_calibrator  = puzzlebot_challenge.line.line_calibrator:main',
+            'line_follower    = puzzlebot_challenge.line.line_follower:main',
+            'line_viewer      = puzzlebot_challenge.line.line_viewer:main',
+            # control
+            'pid_controller   = puzzlebot_challenge.control.pid_controller:main',
+            'pid_tuner        = puzzlebot_challenge.control.pid_tuner:main',
+            'motor_watchdog   = puzzlebot_challenge.control.motor_watchdog:main',
+            'teleop           = puzzlebot_challenge.control.teleop:main',
+            # traffic
+            'traffic_detector = puzzlebot_challenge.traffic.traffic_controller_hsv:main',
+            'hsv_calibrator   = puzzlebot_challenge.traffic.hsv_calibrator:main',
+            # signs
+            'sign_detector              = puzzlebot_challenge.signs.sign_detector:main',
+            'sign_behavior_controller   = puzzlebot_challenge.signs.sign_behavior_controller:main',
         ],
     },
 )
