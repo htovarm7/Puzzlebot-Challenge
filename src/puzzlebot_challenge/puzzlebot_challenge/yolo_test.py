@@ -32,9 +32,9 @@ USE_HALF     = torch.cuda.is_available()   # FP16 solo en GPU
 GSTREAMER = (
     'nvarguscamerasrc sensor-mode=2 ! '
     'video/x-raw(memory:NVMM),width=1920,height=1080,format=NV12,framerate=30/1 ! '
-    'nvvidconv ! video/x-raw,width=320,height=240,format=BGRx ! '
+    'nvvidconv ! video/x-raw,width=640,height=480,format=BGRx ! '
     'videoconvert ! video/x-raw,format=BGR ! '
-    'appsink name=sink drop=true max-buffers=1 emit-signals=true sync=false'
+    'appsink drop=true max-buffers=1 sync=false'
 )
 
 
