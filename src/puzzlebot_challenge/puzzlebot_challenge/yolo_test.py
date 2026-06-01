@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-yolo_test.py — Test directo de YOLO con la cámara en el Jetson.
+yolo_test.py — Test de YOLO optimizado para Jetson Nano (TensorRT + FP16).
 
 Uso:
   python3 yolo_test.py                  # cámara en vivo
   python3 yolo_test.py imagen.jpg       # imagen estática
+
+Para exportar a TensorRT antes de correr (hazlo una vez en la Jetson):
+  python3 yolo_test.py --export
 """
 
 import ctypes
 ctypes.CDLL('/usr/lib/aarch64-linux-gnu/libgomp.so.1', mode=ctypes.RTLD_GLOBAL)
 
 import sys
+import os
 import time
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
 
-MODEL_PATH = '/home/puzzlebot/Puzzlebot-Challenge/install/puzzlebot_challenge/share/puzzlebot_challenge/models/best.pt'
-CONF       = 0.10
-IMGSZ      = 320
+# ── Configuración ────────────────────────────────────────────────────────────
+MODEL_PT     = '/home/puzzlebot/Puzzlebot-Challenge/install/puzzlebot_challenge/share/puzzlebot_challenge/models/best.pt'
+MODEL_ENGINE = MODEL_PT.replace('.pt', '.engine')
+CONF         = 0.10
+IMGSZ        = 320
+DEVICE       = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+USE_HALF     = torch.cuda.is_available()   # FP16 solo en GPU
 
 GSTREAMER = (
     'nvarguscamerasrc sensor-mode=2 ! '
@@ -28,16 +37,53 @@ GSTREAMER = (
     'appsink name=sink drop=true max-buffers=1 emit-signals=true sync=false'
 )
 
-print(f'Cargando modelo: {MODEL_PATH}')
-model = YOLO(MODEL_PATH)
-print(f'Clases: {model.names}')
 
+def export_to_trt():
+    """Exporta best.pt a TensorRT engine (correr una sola vez en la Jetson)."""
+    print(f'Exportando {MODEL_PT} → TensorRT FP16 ...')
+    m = YOLO(MODEL_PT)
+    m.export(format='engine', half=True, imgsz=IMGSZ, device=0, workspace=2)
+    print(f'Engine guardado en: {MODEL_ENGINE}')
+
+
+def load_model():
+    if os.path.exists(MODEL_ENGINE):
+        print(f'Cargando TensorRT engine: {MODEL_ENGINE}')
+        model = YOLO(MODEL_ENGINE)
+    else:
+        print(f'Engine no encontrado, cargando .pt: {MODEL_PT}')
+        print('  → Corre "python3 yolo_test.py --export" para generar el engine')
+        model = YOLO(MODEL_PT)
+    return model
+
+
+def warmup(model):
+    dummy = np.zeros((IMGSZ, IMGSZ, 3), dtype=np.uint8)
+    for _ in range(3):
+        model.predict(dummy, conf=CONF, imgsz=IMGSZ, device=DEVICE,
+                      half=USE_HALF, verbose=False)
+    print('Warmup listo.')
+
+
+# ── Modo export ──────────────────────────────────────────────────────────────
+if '--export' in sys.argv:
+    export_to_trt()
+    sys.exit(0)
+
+# ── Carga de modelo ──────────────────────────────────────────────────────────
+print(f'Device: {DEVICE}  |  half={USE_HALF}')
+model = load_model()
+print(f'Clases: {model.names}')
+warmup(model)
+
+# ── Modo imagen estática ─────────────────────────────────────────────────────
 if len(sys.argv) > 1:
     frame = cv2.imread(sys.argv[1])
     if frame is None:
         print(f'ERROR: no se pudo leer {sys.argv[1]}')
         sys.exit(1)
-    r = model.predict(frame, conf=CONF, imgsz=IMGSZ, verbose=True)[0]
+    r = model.predict(frame, conf=CONF, imgsz=IMGSZ, device=DEVICE,
+                      half=USE_HALF, verbose=True)[0]
     print('Detecciones:')
     for box in r.boxes:
         name = model.names[int(box.cls)]
@@ -48,6 +94,7 @@ if len(sys.argv) > 1:
         print('  (ninguna)')
     sys.exit(0)
 
+# ── Modo cámara en vivo ──────────────────────────────────────────────────────
 print('Abriendo cámara...')
 cap = cv2.VideoCapture(GSTREAMER, cv2.CAP_GSTREAMER)
 if not cap.isOpened():
@@ -59,28 +106,37 @@ if not cap.isOpened():
     sys.exit(1)
 
 print('Cámara abierta. Detectando (Ctrl+C para salir)...\n')
-frame_n = 0
+
+fps_t  = time.monotonic()
+fps_n  = 0
+fps    = 0.0
+
 try:
     while True:
         ok, frame = cap.read()
         if not ok:
             print('ERROR leyendo frame')
-            time.sleep(0.1)
+            time.sleep(0.05)
             continue
 
-        frame_n += 1
-        if frame_n % 3 != 0:
-            continue
+        t0 = time.monotonic()
+        r  = model.predict(frame, conf=CONF, imgsz=IMGSZ, device=DEVICE,
+                           half=USE_HALF, verbose=False)[0]
 
-        r = model.predict(frame, conf=CONF, imgsz=IMGSZ, verbose=False)[0]
+        # FPS rolling (cada 30 frames)
+        fps_n += 1
+        if fps_n >= 30:
+            fps   = fps_n / (time.monotonic() - fps_t)
+            fps_t = time.monotonic()
+            fps_n = 0
 
         if r.boxes:
             for box in r.boxes:
                 name = model.names[int(box.cls)]
                 conf = float(box.conf)
-                print(f'DETECTED: {name:20} {conf:.0%}', flush=True)
+                print(f'DETECTED: {name:20} {conf:.0%}  |  {fps:.1f} FPS', flush=True)
         else:
-            print(f'frame={frame_n}  nada detectado', flush=True)
+            print(f'nada detectado  |  {fps:.1f} FPS', flush=True)
 
 except KeyboardInterrupt:
     pass
