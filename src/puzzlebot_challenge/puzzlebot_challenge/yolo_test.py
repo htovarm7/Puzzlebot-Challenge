@@ -31,14 +31,15 @@ from ultralytics import YOLO
 # ── Configuración ────────────────────────────────────────────────────────────
 MODEL_PT     = '/home/puzzlebot/Puzzlebot-Challenge/install/puzzlebot_challenge/share/puzzlebot_challenge/models/best.pt'
 MODEL_ENGINE = MODEL_PT.replace('.pt', '.engine')
-CONF         = 0.10
+CONF         = 0.45
 IMGSZ        = 256
 DEVICE       = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 USE_HALF     = torch.cuda.is_available()   # FP16 solo en GPU
 
+# sensor-mode=4: 1280x720 @ 60fps — permite que la inferencia (~39fps) sea el cuello de botella
 GSTREAMER = (
-    'nvarguscamerasrc sensor-mode=2 ! '
-    'video/x-raw(memory:NVMM),width=1920,height=1080,format=NV12,framerate=30/1 ! '
+    'nvarguscamerasrc sensor-mode=4 ! '
+    'video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=60/1 ! '
     'nvvidconv ! video/x-raw,width=640,height=480,format=BGRx ! '
     'videoconvert ! video/x-raw,format=BGR ! '
     'appsink drop=true max-buffers=1 sync=false'

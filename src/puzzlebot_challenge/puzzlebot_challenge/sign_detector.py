@@ -14,13 +14,13 @@ import time
 
 # Preload libgomp globally before torch is imported — required on Jetson aarch64
 # to avoid "cannot allocate memory in static TLS block" at runtime.
-for _gomp in (
+for _lib in (
+    '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
     '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
     'libgomp.so.1',
 ):
     try:
-        ctypes.CDLL(_gomp, mode=ctypes.RTLD_GLOBAL)
-        break
+        ctypes.CDLL(_lib, mode=ctypes.RTLD_GLOBAL)
     except OSError:
         pass
 
@@ -53,10 +53,14 @@ def _get_model(model_path: str):
         import sys, traceback, torch
         from ultralytics import YOLO
         print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
-        _YOLO_MODEL = YOLO(model_path)
+        engine_path = model_path.replace('.pt', '.engine')
+        load_path = engine_path if os.path.exists(engine_path) else model_path
+        print(f"[sign_detector] loading: {load_path}")
+        _YOLO_MODEL = YOLO(load_path)
 
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"[sign_detector] device={device}")
+        _INFER_HALF = torch.cuda.is_available()
+        print(f"[sign_detector] device={device}  half={_INFER_HALF}")
 
         print(f"[sign_detector] model loaded: {model_path}")
     except Exception as e:
@@ -75,10 +79,12 @@ def _warmup(model, imgsz: int = 192):
         print(f"[sign_detector] warmup skipped: {e}")
 
 
-def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
+def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 256) -> list:
     if model is None:
         return []
-    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz)[0]
+    results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
+                            device="cuda:0" if _INFER_HALF else "cpu",
+                            half=_INFER_HALF)[0]
     dets = []
     for box in results.boxes:
         label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
@@ -113,7 +119,7 @@ class SignDetectorNode(Node):
         self.declare_parameter("image_topic",    "/camera/image_raw")
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path",     self._default_model_path())
-        self.declare_parameter("imgsz",          320)
+        self.declare_parameter("imgsz",          256)
 
         image_topic = self.get_parameter("image_topic").value
         self._conf  = float(self.get_parameter("conf_threshold").value)
