@@ -44,15 +44,20 @@ def _get_model(model_path: str):
         return _YOLO_MODEL
     _YOLO_TRIED = True
 
-    if not os.path.exists(model_path):
-        print(f"[sign_detector] WARN: model not found at {model_path} — YOLO disabled", flush=True)
+    base = model_path.replace('.pt', '').replace('.onnx', '').replace('.engine', '')
+    engine_path = base + '.engine'
+    onnx_path   = base + '.onnx'
+    if os.path.exists(engine_path):
+        load_path = engine_path
+    elif os.path.exists(onnx_path):
+        load_path = onnx_path
+    else:
+        print(f"[sign_detector] ERROR: no se encontró .engine ni .onnx en {base} — YOLO disabled", flush=True)
         return None
     try:
         import sys, traceback, torch
         from ultralytics import YOLO
         print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
-        engine_path = model_path.replace('.pt', '.engine')
-        load_path = engine_path if os.path.exists(engine_path) else model_path
         print(f"[sign_detector] loading: {load_path}")
         _YOLO_MODEL = YOLO(load_path)
 
