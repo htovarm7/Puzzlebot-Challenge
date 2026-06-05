@@ -81,9 +81,10 @@ def _warmup(model, imgsz: int = 192):
     except Exception as e:
         print(f"[sign_detector] warmup skipped: {e}")
 
-"""
-def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int):
-    Verifica dirección de flecha usando masa de contorno izq vs der.
+def _contour_arrow_direction(frame, x1, y1, x2, y2):
+    """Verifica direccion de flecha usando masa de contorno.
+    Retorna: turn_left | turn_right | go_straight | None (ambiguo)
+    """
     crop = frame[max(0, y1):y2, max(0, x1):x2]
     if crop.size == 0:
         return None
@@ -98,16 +99,23 @@ def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: i
         return None
     mask = np.zeros(thresh.shape, np.uint8)
     cv2.drawContours(mask, [cnt], -1, 255, cv2.FILLED)
-    mid = mask.shape[1] // 2
-    left_mass  = int(np.sum(mask[:, :mid]))
-    right_mass = int(np.sum(mask[:, mid:]))
-    ratio = left_mass / max(right_mass, 1)
-    if ratio > 1.1:
+    h, w  = mask.shape
+    mid_x = w // 2
+    mid_y = h // 2
+    left_mass  = int(np.sum(mask[:, :mid_x]))
+    right_mass = int(np.sum(mask[:, mid_x:]))
+    top_mass   = int(np.sum(mask[:mid_y, :]))
+    bot_mass   = int(np.sum(mask[mid_y:, :]))
+    lr_ratio   = left_mass  / max(right_mass, 1)
+    tb_ratio   = top_mass   / max(bot_mass,   1)
+    if lr_ratio > 1.15:
         return "turn_left"
-    if ratio < 0.91:
+    if lr_ratio < 0.87:
         return "turn_right"
+    # simétrico izq/der → flecha recta; confirma con asimetría arriba/abajo
+    if 0.87 <= lr_ratio <= 1.15 and abs(tb_ratio - 1.0) < 0.3:
+        return "go_straight"
     return None
-"""
 
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
@@ -119,10 +127,10 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 3
     for box in results.boxes:
         label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        # if label in ("turn_left", "turn_right"):
-        #     contour_dir = _contour_arrow_direction(frame, x1, y1, x2, y2)
-        #     if contour_dir is not None:
-        #         label = contour_dir
+        if label in ("turn_left", "turn_right", "go_straight"):
+            contour_dir = _contour_arrow_direction(frame, x1, y1, x2, y2)
+            if contour_dir is not None:
+                label = contour_dir
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
 
