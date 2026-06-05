@@ -77,7 +77,7 @@ def _warmup(model, imgsz: int = 192):
         print(f"[sign_detector] warmup skipped: {e}")
 
 
-def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> str | None:
+def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int):
     """Verifica dirección de flecha usando masa de contorno izq vs der."""
     crop = frame[max(0, y1):y2, max(0, x1):x2]
     if crop.size == 0:
