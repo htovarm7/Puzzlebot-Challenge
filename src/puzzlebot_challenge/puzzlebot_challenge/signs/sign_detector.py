@@ -82,40 +82,33 @@ def _warmup(model, imgsz: int = 192):
         print(f"[sign_detector] warmup skipped: {e}")
 
 def _contour_arrow_direction(frame, x1, y1, x2, y2):
-    """Verifica direccion de flecha usando masa de contorno.
+    """Verifica direccion de flecha aislando pixeles blancos (flecha) por HSV
+    y usando el centroide horizontal del contorno mas grande.
     Retorna: turn_left | turn_right | go_straight | None (ambiguo)
     """
     crop = frame[max(0, y1):y2, max(0, x1):x2]
     if crop.size == 0:
         return None
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    # Aislar flecha blanca: baja saturacion, alto valor
+    white_mask = cv2.inRange(hsv, (0, 0, 160), (180, 70, 255))
+    contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
     cnt = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(cnt) < 80:
+    if cv2.contourArea(cnt) < 100:
         return None
-    mask = np.zeros(thresh.shape, np.uint8)
-    cv2.drawContours(mask, [cnt], -1, 255, cv2.FILLED)
-    h, w  = mask.shape
-    mid_x = w // 2
-    mid_y = h // 2
-    left_mass  = int(np.sum(mask[:, :mid_x]))
-    right_mass = int(np.sum(mask[:, mid_x:]))
-    top_mass   = int(np.sum(mask[:mid_y, :]))
-    bot_mass   = int(np.sum(mask[mid_y:, :]))
-    lr_ratio   = left_mass  / max(right_mass, 1)
-    tb_ratio   = top_mass   / max(bot_mass,   1)
-    if lr_ratio > 1.15:
+    M = cv2.moments(cnt)
+    if M["m00"] == 0:
+        return None
+    cx = M["m10"] / M["m00"]
+    w  = crop.shape[1]
+    ratio = cx / w  # 0.0=extremo izquierdo, 1.0=extremo derecho
+    if ratio < 0.44:
         return "turn_left"
-    if lr_ratio < 0.87:
+    if ratio > 0.56:
         return "turn_right"
-    # simétrico izq/der → flecha recta; confirma con asimetría arriba/abajo
-    if 0.87 <= lr_ratio <= 1.15 and abs(tb_ratio - 1.0) < 0.3:
-        return "go_straight"
-    return None
+    return "go_straight"
 
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:

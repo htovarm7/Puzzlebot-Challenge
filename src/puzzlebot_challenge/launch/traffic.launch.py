@@ -7,9 +7,9 @@ Métodos:
 
 Uso
 ---
-  ros2 launch puzzlebot_challenge traffic_light.launch.py                  # default: circles
-  ros2 launch puzzlebot_challenge traffic_light.launch.py method:=hsv
-  ros2 launch puzzlebot_challenge traffic_light.launch.py method:=circles debug:=true
+  ros2 launch puzzlebot_challenge traffic.launch.py                  # default: circles
+  ros2 launch puzzlebot_challenge traffic.launch.py method:=hsv
+  ros2 launch puzzlebot_challenge traffic.launch.py method:=circles debug:=true
 """
 
 import os

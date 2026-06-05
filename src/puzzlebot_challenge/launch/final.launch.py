@@ -28,7 +28,7 @@ Prioridad de control:
 
 Uso:
   ros2 launch puzzlebot_challenge final.launch.py
-  ros2 launch puzzlebot_challenge final.launch.py v_base:=0.12 debug:=true
+  ros2 launch puzzlebot_challenge final.launch.py v_base:=0.12
 """
 
 import os

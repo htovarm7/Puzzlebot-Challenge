@@ -3,13 +3,14 @@ signs.launch.py
 ===============
 Stack completo para detección de señales de tránsito con acciones.
 
-Nodos (Jetson — este launch):
-  1. picam_publisher          – driver cámara CSI  (desactivar con with_camera:=false)
+Nodos (Jetson):
+  1. picam_publisher          – driver cámara CSI
   2. line_detector            – /line/shift, /line/angle, /line/detected
   3. traffic_detector (HSV)   – /traffic_light  (red | yellow | green | none)
-  4. line_follower            – control PD de línea
+  4. sign_detector (YOLO)     – /sign/command, /sign/detected
+  5. line_follower            – control PD de línea
                                  ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
-  5. sign_behavior_controller – intercepta velocidades del line_follower
+  6. sign_behavior_controller – intercepta velocidades del line_follower
                                  y aplica comportamientos por señal:
                                    give_way    → para 2 s
                                    stop        → para mientras esté visible + hold
@@ -18,11 +19,7 @@ Nodos (Jetson — este launch):
                                    turn_right  → al dejar de ver la señal, gira derecha
                                    go_straight → al dejar de ver la señal, avanza recto
                                  ↳ publica → /VelocitySetL, /VelocitySetR
-  6. sign_api                 – HTTP server (puerto 8081) para recibir /sign/command
   7. motor_watchdog           – para motores si no llegan comandos
-
-Laptop (terminal separada):
-  ros2 launch puzzlebot_challenge signs_laptop.launch.py jetson_ip:=<IP_JETSON>
 
 Prioridad de control:
   1° /traffic_light  red/yellow → STOP  (en line_follower)
@@ -31,10 +28,9 @@ Prioridad de control:
 
 Uso:
   ros2 launch puzzlebot_challenge signs.launch.py
-  ros2 launch puzzlebot_challenge signs.launch.py v_base:=0.10 debug:=true
+  ros2 launch puzzlebot_challenge signs.launch.py v_base:=0.10
 """
 
-import glob
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
