@@ -12,10 +12,22 @@ sign_detector.py when present.
 Requirements: JetPack 4.6+, ultralytics, tensorrt (included in JetPack image).
 """
 
+import ctypes
 import argparse
 import os
 import sys
 import time
+
+# Must preload before tensorrt is imported — same fix as sign_detector.py
+for _lib in (
+    '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
+    '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
+    'libgomp.so.1',
+):
+    try:
+        ctypes.CDLL(_lib, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass
 
 
 def parse_args():
