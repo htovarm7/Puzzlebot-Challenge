@@ -22,9 +22,9 @@ def generate_launch_description():
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
 
-    kp_arg       = DeclareLaunchArgument('kp',            default_value='1.2',  description='PD P gain (normalised error)')
-    kd_arg       = DeclareLaunchArgument('kd',            default_value='0.35', description='PD D gain (normalised error)')
-    ka_arg       = DeclareLaunchArgument('ka',            default_value='0.4',  description='Angle correction weight (0=off, 1=full)')
+    kp_arg       = DeclareLaunchArgument('kp',            default_value='0.8',  description='PD P gain (normalised error)')
+    kd_arg       = DeclareLaunchArgument('kd',            default_value='0.08', description='PD D gain (normalised error)')
+    ka_arg       = DeclareLaunchArgument('ka',            default_value='0.2',  description='Angle correction weight (0=off, 1=full)')
     vbase_arg    = DeclareLaunchArgument('v_base',        default_value='0.12', description='Velocidad base [m/s]')
     vmin_arg     = DeclareLaunchArgument('v_min',         default_value='0.04', description='Velocidad mínima [m/s]')
     ctime_arg    = DeclareLaunchArgument('crossing_time', default_value='3.0',  description='Segundos atravesando intersección recto')
