@@ -15,8 +15,8 @@ def generate_launch_description():
         DeclareLaunchArgument('kp',     default_value='0.8',  description='P gain'),
         DeclareLaunchArgument('kd',     default_value='0.08', description='D gain'),
         DeclareLaunchArgument('ka',     default_value='0.2',  description='Angle correction weight'),
-        DeclareLaunchArgument('v_base', default_value='0.2',  description='Velocidad base [m/s]'),
-        DeclareLaunchArgument('v_min',  default_value='0.1', description='Velocidad mínima [m/s]'),
+        DeclareLaunchArgument('v_base', default_value='0.4',  description='Velocidad base [m/s]'),
+        DeclareLaunchArgument('v_min',  default_value='0.04', description='Velocidad mínima [m/s]'),
 
         Node(
             package='puzzlebot_challenge',
