@@ -12,8 +12,6 @@ import ctypes
 import os
 import time
 
-# Preload libgomp globally before torch is imported — required on Jetson aarch64
-# to avoid "cannot allocate memory in static TLS block" at runtime.
 for _lib in (
     '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
     '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
@@ -85,9 +83,11 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 2
     results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
                             device="cuda:0" if _INFER_HALF else "cpu",
                             half=_INFER_HALF)[0]
+    _remap = {"turn_left": "turn_right", "turn_right": "turn_left"}
     dets = []
     for box in results.boxes:
         label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
+        label = _remap.get(label, label)
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
