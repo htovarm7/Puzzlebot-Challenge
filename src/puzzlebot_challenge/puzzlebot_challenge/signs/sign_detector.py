@@ -10,6 +10,7 @@ Tópicos publicados:
 
 import ctypes
 import os
+import threading
 import time
 
 for _lib in (
@@ -157,7 +158,8 @@ class SignDetectorNode(Node):
         model_path  = self.get_parameter("model_path").value
 
         self._bridge = CvBridge()
-        self._model  = _get_model(model_path)
+        self._model  = None
+        self._model_ready = False
 
         self._latest_dets    = []
         self._latest_command = "none"
@@ -174,7 +176,20 @@ class SignDetectorNode(Node):
         self.get_logger().info(
             f"SignDetector | topic={image_topic} | "
             f"imgsz={self._imgsz} | conf>={self._conf:.0%} | "
-            f"YOLO={'ON' if self._model else 'OFF'}")
+            f"cargando modelo en background...")
+
+        threading.Thread(
+            target=self._load_model_bg, args=(model_path,), daemon=True
+        ).start()
+
+    def _load_model_bg(self, model_path: str):
+        model = _get_model(model_path)
+        if model:
+            _warmup(model, self._imgsz)
+        self._model = model
+        self._model_ready = True
+        self.get_logger().info(
+            f"SignDetector LISTO | YOLO={'ON' if self._model else 'OFF (sin modelo)'}")
 
     def _default_model_path(self) -> str:
         try:
@@ -185,6 +200,9 @@ class SignDetectorNode(Node):
             return os.path.join(here, "..", "utils", "best.pt")
 
     def _on_image(self, msg: Image):
+        if not self._model_ready:
+            return
+
         try:
             frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception as e:

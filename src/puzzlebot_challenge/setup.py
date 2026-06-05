@@ -46,6 +46,7 @@ setup(
             # signs
             'sign_detector              = puzzlebot_challenge.signs.sign_detector:main',
             'sign_behavior_controller   = puzzlebot_challenge.signs.sign_behavior_controller:main',
+            'sign_viewer                = puzzlebot_challenge.signs.sign_viewer:main',
         ],
     },
 )

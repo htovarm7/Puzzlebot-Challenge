@@ -66,10 +66,10 @@ def generate_launch_description():
     # ── Argumentos ──────────────────────────────────────────────────────────────
     args = [
         # Line follower
-        DeclareLaunchArgument('kp',             default_value='1.2',  description='PD P gain'),
-        DeclareLaunchArgument('kd',             default_value='0.35', description='PD D gain'),
-        DeclareLaunchArgument('ka',             default_value='0.4',  description='Peso corrección ángulo'),
-        DeclareLaunchArgument('v_base',         default_value='0.12', description='Velocidad base [m/s]'),
+        DeclareLaunchArgument('kp',             default_value='0.8',  description='PD P gain'),
+        DeclareLaunchArgument('kd',             default_value='0.08', description='PD D gain'),
+        DeclareLaunchArgument('ka',             default_value='0.2',  description='Peso corrección ángulo'),
+        DeclareLaunchArgument('v_base',         default_value='0.4', description='Velocidad base [m/s]'),
         DeclareLaunchArgument('crossing_time',  default_value='3.0',  description='Segundos en intersección recto [s]'),
         DeclareLaunchArgument('cooldown_time',  default_value='3.0',  description='Cooldown entre intersecciones [s]'),
         # Sign behaviors
@@ -176,6 +176,14 @@ def generate_launch_description():
         output='screen',
     )
 
+    # ── 8. Visualizador de señales (requiere display) ────────────────────────────
+    sign_viewer = Node(
+        package='puzzlebot_challenge',
+        executable='sign_viewer',
+        name='sign_viewer',
+        output='screen',
+    )
+
     # Precarga libgomp para evitar error TLS en Jetson + ROS2
     libgomp = _find_libgomp()
     env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
@@ -194,4 +202,5 @@ def generate_launch_description():
         line_follower,
         sign_behavior,
         motor_watchdog,
+        sign_viewer,
     ])
