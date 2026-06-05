@@ -176,14 +176,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 8. Visualizador de señales (requiere display) ────────────────────────────
-    sign_viewer = Node(
-        package='puzzlebot_challenge',
-        executable='sign_viewer',
-        name='sign_viewer',
-        output='screen',
-    )
-
     # Precarga libgomp para evitar error TLS en Jetson + ROS2
     libgomp = _find_libgomp()
     env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
@@ -202,5 +194,4 @@ def generate_launch_description():
         line_follower,
         sign_behavior,
         motor_watchdog,
-        sign_viewer,
     ])
