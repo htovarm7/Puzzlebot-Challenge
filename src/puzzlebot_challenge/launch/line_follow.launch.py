@@ -14,7 +14,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('kp',     default_value='0.3',  description='P gain'),
         DeclareLaunchArgument('kd',     default_value='0.08', description='D gain'),
-        DeclareLaunchArgument('ka',     default_value='0.4',  description='Angle correction weight'),
+        DeclareLaunchArgument('ka',     default_value='0.2',  description='Angle correction weight'),
         DeclareLaunchArgument('v_base', default_value='0.2',  description='Velocidad base [m/s]'),
         DeclareLaunchArgument('v_min',  default_value='0.04', description='Velocidad mínima [m/s]'),
 

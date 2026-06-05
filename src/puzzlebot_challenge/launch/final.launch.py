@@ -68,7 +68,7 @@ def generate_launch_description():
         # Line follower
         DeclareLaunchArgument('kp',             default_value='0.3',  description='P gain'),
         DeclareLaunchArgument('kd',             default_value='0.08', description='D gain'),
-        DeclareLaunchArgument('ka',             default_value='0.4',  description='Peso corrección ángulo'),
+        DeclareLaunchArgument('ka',             default_value='0.2',  description='Peso corrección ángulo'),
         DeclareLaunchArgument('v_base',         default_value='0.2', description='Velocidad base [m/s]'),
         DeclareLaunchArgument('crossing_time',  default_value='3.0',  description='Segundos en intersección recto [s]'),
         DeclareLaunchArgument('cooldown_time',  default_value='3.0',  description='Cooldown entre intersecciones [s]'),

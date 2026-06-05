@@ -9,7 +9,7 @@ FORWARD_SIGN = -1
 
 KP = 0.3
 KD = 0.08
-KA = 0.4
+KA = 0.2
 
 V_BASE    = 0.2   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
