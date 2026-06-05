@@ -30,7 +30,7 @@ from ultralytics import YOLO
 
 MODEL_PT     = '/home/puzzlebot/Puzzlebot-Challenge/install/puzzlebot_challenge/share/puzzlebot_challenge/models/best.pt'
 MODEL_ENGINE = MODEL_PT.replace('.pt', '.engine')
-CONF         = 0.45
+CONF         = 0.65
 IMGSZ        = 256
 DEVICE       = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 USE_HALF     = torch.cuda.is_available()   # FP16 solo en GPU

@@ -82,31 +82,26 @@ def _warmup(model, imgsz: int = 192):
         print(f"[sign_detector] warmup skipped: {e}")
 
 def _contour_arrow_direction(frame, x1, y1, x2, y2):
-    """Verifica direccion de flecha aislando pixeles blancos (flecha) por HSV
-    y usando el centroide horizontal del contorno mas grande.
-    Retorna: turn_left | turn_right | go_straight | None (ambiguo)
+    """Detecta direccion de flecha por proyeccion de columnas.
+    Suma pixeles blancos por columna, suaviza el perfil y busca el pico.
+    El pico indica donde esta la base del arrowhead (parte mas ancha).
+    Retorna: turn_left | turn_right | go_straight | None
     """
     crop = frame[max(0, y1):y2, max(0, x1):x2]
     if crop.size == 0:
         return None
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    # Aislar flecha blanca: baja saturacion, alto valor
-    white_mask = cv2.inRange(hsv, (0, 0, 160), (180, 70, 255))
-    contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
+    white = cv2.inRange(hsv, (0, 0, 160), (180, 70, 255))
+    if int(white.sum() // 255) < 300:
         return None
-    cnt = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(cnt) < 100:
-        return None
-    M = cv2.moments(cnt)
-    if M["m00"] == 0:
-        return None
-    cx = M["m10"] / M["m00"]
-    w  = crop.shape[1]
-    ratio = cx / w  # 0.0=extremo izquierdo, 1.0=extremo derecho
-    if ratio < 0.44:
+    profile = white.sum(axis=0).astype(np.float32)
+    profile = cv2.GaussianBlur(profile.reshape(1, -1), (9, 1), 0).flatten()
+    peak_x  = int(np.argmax(profile))
+    w       = crop.shape[1]
+    ratio   = peak_x / w
+    if ratio < 0.40:
         return "turn_left"
-    if ratio > 0.56:
+    if ratio > 0.60:
         return "turn_right"
     return "go_straight"
 
@@ -152,7 +147,7 @@ class SignDetectorNode(Node):
         super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.45)
+        self.declare_parameter("conf_threshold", 0.65)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
 
