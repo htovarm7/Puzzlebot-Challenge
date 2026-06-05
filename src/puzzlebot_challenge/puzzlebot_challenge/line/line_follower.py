@@ -11,7 +11,7 @@ KP = 0.3
 KD = 0.08
 KA = 0.4
 
-V_BASE    = 0.1   # m/s cruise speed
+V_BASE    = 0.2   # m/s cruise speed
 V_MIN     = 0.04   # m/s minimum speed
 OMEGA_MAX = 2.0    # rad/s saturation
 
