@@ -69,7 +69,7 @@ def generate_launch_description():
         DeclareLaunchArgument('kp',             default_value='0.8',  description='PD P gain'),
         DeclareLaunchArgument('kd',             default_value='0.08', description='PD D gain'),
         DeclareLaunchArgument('ka',             default_value='0.2',  description='Peso corrección ángulo'),
-        DeclareLaunchArgument('v_base',         default_value='0.4', description='Velocidad base [m/s]'),
+        DeclareLaunchArgument('v_base',         default_value='0.1', description='Velocidad base [m/s]'),
         DeclareLaunchArgument('crossing_time',  default_value='3.0',  description='Segundos en intersección recto [s]'),
         DeclareLaunchArgument('cooldown_time',  default_value='3.0',  description='Cooldown entre intersecciones [s]'),
         # Sign behaviors
