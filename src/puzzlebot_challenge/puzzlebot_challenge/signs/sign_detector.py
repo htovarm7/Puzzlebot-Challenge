@@ -109,7 +109,7 @@ def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: i
     return None
 """
 
-def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 256) -> list:
+def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
     results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
@@ -153,7 +153,7 @@ class SignDetectorNode(Node):
         self.declare_parameter("image_topic",    "/camera/image_raw")
         self.declare_parameter("conf_threshold", 0.45)
         self.declare_parameter("model_path",     self._default_model_path())
-        self.declare_parameter("imgsz",          256)
+        self.declare_parameter("imgsz",          320)
 
         image_topic = self.get_parameter("image_topic").value
         self._conf  = float(self.get_parameter("conf_threshold").value)
