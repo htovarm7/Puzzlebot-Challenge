@@ -76,9 +76,9 @@ def _warmup(model, imgsz: int = 192):
     except Exception as e:
         print(f"[sign_detector] warmup skipped: {e}")
 
-
+"""
 def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int):
-    """Verifica dirección de flecha usando masa de contorno izq vs der."""
+    Verifica dirección de flecha usando masa de contorno izq vs der.
     crop = frame[max(0, y1):y2, max(0, x1):x2]
     if crop.size == 0:
         return None
@@ -102,7 +102,7 @@ def _contour_arrow_direction(frame: np.ndarray, x1: int, y1: int, x2: int, y2: i
     if ratio < 0.91:
         return "turn_right"
     return None
-
+"""
 
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 256) -> list:
     if model is None:
@@ -114,10 +114,10 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 2
     for box in results.boxes:
         label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        if label in ("turn_left", "turn_right"):
-            contour_dir = _contour_arrow_direction(frame, x1, y1, x2, y2)
-            if contour_dir is not None:
-                label = contour_dir
+        # if label in ("turn_left", "turn_right"):
+        #     contour_dir = _contour_arrow_direction(frame, x1, y1, x2, y2)
+        #     if contour_dir is not None:
+        #         label = contour_dir
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
 
