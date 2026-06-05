@@ -4,8 +4,8 @@ picam_publisher:
     src_width: 1280
     src_height: 720
     src_fps: 60
-    out_width: 320
-    out_height: 180
+    out_width: 1280
+    out_height: 720
     pub_fps: 60.0
     topic: /camera/image_raw
     frame_id: picam
