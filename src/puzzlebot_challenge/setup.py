@@ -39,8 +39,10 @@ setup(
             'motor_watchdog   = puzzlebot_challenge.control.motor_watchdog:main',
             'teleop           = puzzlebot_challenge.control.teleop:main',
             # traffic
-            'traffic_detector = puzzlebot_challenge.traffic.traffic_controller_hsv:main',
-            'hsv_calibrator   = puzzlebot_challenge.traffic.hsv_calibrator:main',
+            'traffic_detector        = puzzlebot_challenge.traffic.traffic_controller_hsv:main',
+            'traffic_detector_hsv    = puzzlebot_challenge.traffic.traffic_controller_hsv:main',
+            'traffic_detector_circle = puzzlebot_challenge.traffic.traffic_controller_circle:main',
+            'hsv_calibrator          = puzzlebot_challenge.traffic.hsv_calibrator:main',
             # signs
             'sign_detector              = puzzlebot_challenge.signs.sign_detector:main',
             'sign_behavior_controller   = puzzlebot_challenge.signs.sign_behavior_controller:main',

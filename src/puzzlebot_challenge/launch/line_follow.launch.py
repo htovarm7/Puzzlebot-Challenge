@@ -2,11 +2,11 @@
 line_follow.launch.py
 =====================
 Stack completo de seguimiento de línea:
-  1. picam_publisher    – driver cámara CSI
-  2. line_detector_v2   – visión v2: publica /line/shift, /line/angle, /line/detected, /vision/line
-  3. line_follower      – PID: suscribe /line/* → publica /cmd/VelocitySet{L,R}
-  4. motor_watchdog     – seguridad: /cmd/VelocitySet* → /VelocitySet{L,R}, para motores si no llegan comandos
-  5. line_viewer        – ventana de debug (requiere display o ssh -X)
+  1. picam_publisher  – driver cámara CSI
+  2. line_detector    – publica /line/shift, /line/angle, /line/detected
+  3. line_follower    – PD: suscribe /line/* → publica /VelocitySet{L,R}
+  4. motor_watchdog   – para motores si no llegan comandos
+  5. line_viewer      – ventana de debug (requiere display o ssh -X)
 """
 
 import os
@@ -81,13 +81,4 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # API HTTP para recibir sign commands desde la laptop sin DDS
-        # POST http://<JETSON_IP>:8081/sign  {"command": "turn_left"}
-        # GET  http://<JETSON_IP>:8081/sign/turn_left
-        Node(
-            package='puzzlebot_challenge',
-            executable='sign_api',
-            name='sign_api',
-            output='screen',
-        ),
     ])
