@@ -47,13 +47,11 @@ class PiCamPublisher(Node):
         self.declare_parameter('pub_fps',     30.0)
         self.declare_parameter('topic',       '/camera/image_raw')
         self.declare_parameter('frame_id',    'picam')
-        self.declare_parameter('flip_code',   1)   # -1=ambos, 0=vertical, 1=horizontal, -2=ninguno
 
         p = self.get_parameter
         self._out_w    = int(p('out_width').value)
         self._out_h    = int(p('out_height').value)
         self._frame_id = p('frame_id').value
-        self._flip     = int(p('flip_code').value)
 
         pipeline_str = build_pipeline(
             int(p('sensor_mode').value),
@@ -100,8 +98,7 @@ class PiCamPublisher(Node):
         if ok:
             data  = np.frombuffer(mapinfo.data, dtype=np.uint8)
             frame = data.reshape(self._out_h, self._out_w, 3).copy()
-            if self._flip != -2:
-                frame = cv2.flip(frame, self._flip)
+            frame = cv2.flip(frame, -1)
             with self._lock:
                 self._latest_frame = frame
         buf.unmap(mapinfo)
