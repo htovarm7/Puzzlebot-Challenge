@@ -79,6 +79,7 @@ class SignBehaviorController(Node):
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
         self.declare_parameter("sign_cooldown",      SIGN_COOLDOWN)
+        self.declare_parameter("sign_ready_timeout", 30.0)
 
         self.create_subscription(String,  "/sign/command",      self._cb_command,  10)
         self.create_subscription(Bool,    "/sign/detected",     self._cb_detected, 10)
@@ -96,6 +97,8 @@ class SignBehaviorController(Node):
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
         self._last_trigger  = {}   # cmd → timestamp del último disparo
+        self._sign_ready    = False
+        self._start_time    = self._now()
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
@@ -107,6 +110,9 @@ class SignBehaviorController(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def _cb_command(self, msg: String):
+        if not self._sign_ready:
+            self._sign_ready = True
+            self.get_logger().info("[SignBehavior] YOLO listo — robot liberado")
         self._sign_command = msg.data.lower()
 
     def _cb_detected(self, msg: Bool):
@@ -151,6 +157,16 @@ class SignBehaviorController(Node):
     # ── Bucle de control principal (20 Hz) ────────────────────────────────────
 
     def _control_loop(self):
+        if not self._sign_ready:
+            timeout = self.get_parameter("sign_ready_timeout").value
+            if self._now() - self._start_time >= timeout:
+                self._sign_ready = True
+                self.get_logger().warn(
+                    f"[SignBehavior] timeout {timeout:.0f}s sin YOLO — robot liberado de todas formas")
+            else:
+                self._stop()
+                return
+
         elapsed  = self._now() - self._state_start
         cmd      = self._sign_command
         detected = self._sign_detected
