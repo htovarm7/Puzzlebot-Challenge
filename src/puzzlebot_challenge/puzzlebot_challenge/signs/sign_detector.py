@@ -27,7 +27,6 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
@@ -131,13 +130,6 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return out
 
-_SENSOR_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=1,
-)
-
-
 DEBOUNCE_FRAMES = 3   # frames consecutivos para confirmar detección
 
 
@@ -151,12 +143,14 @@ class SignDetectorNode(Node):
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
         self.declare_parameter("min_det_area",   8000)
+        self.declare_parameter("infer_rate_hz",  5.0)
 
-        image_topic    = self.get_parameter("image_topic").value
-        self._conf     = float(self.get_parameter("conf_threshold").value)
-        self._imgsz    = int(self.get_parameter("imgsz").value)
-        self._min_area = int(self.get_parameter("min_det_area").value)
-        model_path     = self.get_parameter("model_path").value
+        image_topic         = self.get_parameter("image_topic").value
+        self._conf          = float(self.get_parameter("conf_threshold").value)
+        self._imgsz         = int(self.get_parameter("imgsz").value)
+        self._min_area      = int(self.get_parameter("min_det_area").value)
+        self._infer_rate_hz = float(self.get_parameter("infer_rate_hz").value)
+        model_path          = self.get_parameter("model_path").value
 
         self._bridge      = CvBridge()
         self._model       = None
@@ -175,7 +169,7 @@ class SignDetectorNode(Node):
         self._confirmed_cmd  = "none"
 
         self.sub_img = self.create_subscription(
-            Image, image_topic, self._on_image, _SENSOR_QOS)
+            Image, image_topic, self._on_image, 10)
 
         self.pub_command  = self.create_publisher(String, "/sign/command",  10)
         self.pub_detected = self.create_publisher(Bool,   "/sign/detected", 10)
@@ -225,15 +219,29 @@ class SignDetectorNode(Node):
 
     def _infer_loop(self):
         """Hilo dedicado: inferencia YOLO sin bloquear el spin de ROS2."""
+        try:
+            os.nice(10)  # prioridad más baja que line_detector para ceder CPU
+        except OSError:
+            pass
+
+        min_dt    = 1.0 / max(self._infer_rate_hz, 0.5)
+        last_time = 0.0
+
         while rclpy.ok():
             self._infer_event.wait()
             self._infer_event.clear()
+
+            now = time.monotonic()
+            if now - last_time < min_dt:
+                continue  # frame demasiado reciente — descartar, esperar el siguiente
 
             with self._infer_lock:
                 frame = self._infer_frame
 
             if frame is None:
                 continue
+
+            last_time = time.monotonic()
 
             try:
                 dets = yolo_detect(frame, self._model,
