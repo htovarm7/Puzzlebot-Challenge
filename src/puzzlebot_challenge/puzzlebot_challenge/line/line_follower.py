@@ -7,20 +7,20 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.45
-KD = 0.10
-KA = 0.2
+KP = 0.28
+KD = 0.18
+KA = 0.15
 
-V_BASE    = 0.2    # m/s cruise speed (rectas)
-V_MIN     = 0.05   # m/s velocidad mínima en curvas cerradas
-OMEGA_MAX = 1.5    # rad/s saturación — reducido para giros más suaves
+V_BASE    = 0.2    # m/s cruise speed
+V_MIN     = 0.05   # m/s velocidad mínima durante corrección
+OMEGA_MAX = 1.0    # rad/s — limita cuánto puede corregir de golpe
 
 SHIFT_SCALE  = 160.0
 ANGLE_SCALE  = 30.0
-DEADBAND     = 0.03   # reducido: corrige desviaciones pequeñas antes de acumularse
+DEADBAND     = 0.04
 LOST_TIMEOUT = 0.5
 CTRL_DT      = 0.05
-DERIV_ALPHA  = 0.20
+DERIV_ALPHA  = 0.30
 
 
 def clamp(x, lo, hi):
