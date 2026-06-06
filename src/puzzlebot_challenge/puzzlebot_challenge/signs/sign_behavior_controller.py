@@ -21,7 +21,7 @@ Comportamientos:
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Bool, String
+from std_msgs.msg import Float32, Bool, String, Empty
 
 # ── Geometría del robot ───────────────────────────────────────────────────────
 WHEEL_RADIUS = 0.05154
@@ -78,13 +78,13 @@ class SignBehaviorController(Node):
         self.declare_parameter("turn_v",             TURN_V)
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
-        self.declare_parameter("sign_cooldown",      SIGN_COOLDOWN)
-        self.declare_parameter("sign_ready_timeout", 30.0)
+        self.declare_parameter("sign_cooldown", SIGN_COOLDOWN)
 
         self.create_subscription(String,  "/sign/command",      self._cb_command,  10)
         self.create_subscription(Bool,    "/sign/detected",     self._cb_detected, 10)
         self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,    10)
         self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,    10)
+        self.create_subscription(Empty,   "/robot/start",       self._cb_start,    10)
 
         self._pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self._pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
@@ -98,7 +98,6 @@ class SignBehaviorController(Node):
         self._line_vel_r    = 0.0
         self._last_trigger  = {}   # cmd → timestamp del último disparo
         self._sign_ready    = False
-        self._start_time    = self._now()
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
@@ -109,10 +108,12 @@ class SignBehaviorController(Node):
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
-    def _cb_command(self, msg: String):
+    def _cb_start(self, _msg: Empty):
         if not self._sign_ready:
             self._sign_ready = True
-            self.get_logger().info("[SignBehavior] YOLO listo — robot liberado")
+            self.get_logger().info("[SignBehavior] /robot/start recibido — robot en marcha")
+
+    def _cb_command(self, msg: String):
         self._sign_command = msg.data.lower()
 
     def _cb_detected(self, msg: Bool):
@@ -158,14 +159,8 @@ class SignBehaviorController(Node):
 
     def _control_loop(self):
         if not self._sign_ready:
-            timeout = self.get_parameter("sign_ready_timeout").value
-            if self._now() - self._start_time >= timeout:
-                self._sign_ready = True
-                self.get_logger().warn(
-                    f"[SignBehavior] timeout {timeout:.0f}s sin YOLO — robot liberado de todas formas")
-            else:
-                self._stop()
-                return
+            self._stop()
+            return
 
         elapsed  = self._now() - self._state_start
         cmd      = self._sign_command

@@ -58,15 +58,9 @@ def _get_model(model_path: str):
     try:
         import sys, traceback, torch
         from ultralytics import YOLO
-        print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
-        print(f"[sign_detector] loading: {load_path}")
         _YOLO_MODEL = YOLO(load_path)
-
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         _INFER_HALF = torch.cuda.is_available()
-        print(f"[sign_detector] device={device}  half={_INFER_HALF}")
-
-        print(f"[sign_detector] model loaded: {model_path}")
+        print(f"[sign_detector] model loaded — CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
         import sys, traceback
         print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
@@ -188,8 +182,11 @@ class SignDetectorNode(Node):
             _warmup(model, self._imgsz)
         self._model = model
         self._model_ready = True
+        status = "ON" if self._model else "OFF (sin modelo)"
+        self.get_logger().info(f"SignDetector LISTO | YOLO={status}")
         self.get_logger().info(
-            f"SignDetector LISTO | YOLO={'ON' if self._model else 'OFF (sin modelo)'}")
+            ">>> Para arrancar el robot: "
+            "ros2 topic pub --once /robot/start std_msgs/Empty '{}'")
 
     def _default_model_path(self) -> str:
         try:
@@ -227,10 +224,6 @@ class SignDetectorNode(Node):
                 f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
         else:
             command = "none"
-            now = time.monotonic()
-            if now - self._last_status_t >= 5.0:
-                self.get_logger().info(f"[detector] nada detectado | frames_in={self._frames_in}")
-                self._last_status_t = now
 
         self._latest_dets    = final_dets
         self._latest_command = command
