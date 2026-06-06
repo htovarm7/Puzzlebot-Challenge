@@ -78,7 +78,8 @@ class SignBehaviorController(Node):
         self.declare_parameter("turn_v",             TURN_V)
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
-        self.declare_parameter("sign_cooldown", SIGN_COOLDOWN)
+        self.declare_parameter("sign_cooldown",  SIGN_COOLDOWN)
+        self.declare_parameter("wait_for_start", True)
 
         self.create_subscription(String,  "/sign/command",      self._cb_command,  10)
         self.create_subscription(Bool,    "/sign/detected",     self._cb_detected, 10)
@@ -97,7 +98,7 @@ class SignBehaviorController(Node):
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
         self._last_trigger  = {}   # cmd → timestamp del último disparo
-        self._sign_ready    = False
+        self._sign_ready    = not bool(self.get_parameter("wait_for_start").value)
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
@@ -121,9 +122,13 @@ class SignBehaviorController(Node):
 
     def _cb_vel_l(self, msg: Float32):
         self._line_vel_l = float(msg.data)
+        if self._sign_ready and self._state == S_IDLE:
+            self._pub_l.publish(msg)
 
     def _cb_vel_r(self, msg: Float32):
         self._line_vel_r = float(msg.data)
+        if self._sign_ready and self._state == S_IDLE:
+            self._pub_r.publish(msg)
 
     # ── Helpers de publicación ────────────────────────────────────────────────
 
@@ -213,7 +218,7 @@ class SignBehaviorController(Node):
                     self._enter(S_PENDING_RIGHT, cmd)
                 elif cmd == "go_straight":
                     self._enter(S_PENDING_STRAIGHT, cmd)
-            self._passthrough()
+            # passthrough ya se hace en _cb_vel_l/_cb_vel_r directamente
 
         # ── PENDING_GIVE_WAY: sigue línea mientras ve la señal ─────────────
         elif self._state == S_PENDING_GIVE_WAY:

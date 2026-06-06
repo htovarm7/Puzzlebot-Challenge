@@ -83,6 +83,7 @@ def generate_launch_description():
         DeclareLaunchArgument('straight_time',  default_value='3.0',  description='Duración go_straight override [s]'),
         DeclareLaunchArgument('straight_v',     default_value='0.12', description='Velocidad go_straight [m/s]'),
         DeclareLaunchArgument('sign_cooldown',  default_value='4.0',  description='Cooldown entre señales iguales [s]'),
+        DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
         # YOLO
         DeclareLaunchArgument('conf_threshold', default_value='0.70', description='Umbral confianza YOLO (0-1)'),
         DeclareLaunchArgument('min_det_area',   default_value='3000', description='Área mínima bbox para detectar señal [px²]'),
@@ -166,6 +167,7 @@ def generate_launch_description():
             'straight_time':      LaunchConfiguration('straight_time'),
             'straight_v':         LaunchConfiguration('straight_v'),
             'sign_cooldown':      LaunchConfiguration('sign_cooldown'),
+            'wait_for_start':     LaunchConfiguration('wait_for_start'),
         }],
         output='screen',
     )
