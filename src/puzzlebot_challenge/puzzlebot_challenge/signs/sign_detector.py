@@ -57,16 +57,15 @@ def _get_model(model_path: str):
     try:
         import sys, traceback, torch
         from ultralytics import YOLO
-        # TensorRT C++ logger writes to stderr — suppress during load, restore after
-        _devnull = os.open(os.devnull, os.O_WRONLY)
-        _old_stderr = os.dup(2)
-        os.dup2(_devnull, 2)
+        # ultralytics + TRT print to stdout/stderr during YOLO() construction
+        _dn = os.open(os.devnull, os.O_WRONLY)
+        _o1, _o2 = os.dup(1), os.dup(2)
+        os.dup2(_dn, 1); os.dup2(_dn, 2)
         try:
             _YOLO_MODEL = YOLO(load_path, task='detect')
         finally:
-            os.dup2(_old_stderr, 2)
-            os.close(_old_stderr)
-            os.close(_devnull)
+            os.dup2(_o1, 1); os.dup2(_o2, 2)
+            os.close(_o1); os.close(_o2); os.close(_dn)
         _INFER_HALF = torch.cuda.is_available()
         print(f"[sign_detector] model loaded — CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
@@ -77,14 +76,23 @@ def _get_model(model_path: str):
 
 
 def _warmup(model, imgsz: int = 320):
+    # TRT engine deserialization + cuDNN/cuBLAS init all print to stdout/stderr here
     dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    _dn = os.open(os.devnull, os.O_WRONLY)
+    _o1, _o2 = os.dup(1), os.dup(2)
+    os.dup2(_dn, 1); os.dup2(_dn, 2)
     try:
         model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz,
                       device="cuda:0" if _INFER_HALF else "cpu",
                       half=_INFER_HALF)
-        print("[sign_detector] warmup done")
     except Exception as e:
-        print(f"[sign_detector] warmup skipped: {e}")
+        os.dup2(_o1, 1); os.dup2(_o2, 2)
+        os.close(_o1); os.close(_o2); os.close(_dn)
+        print(f"[sign_detector] warmup skipped: {e}", flush=True)
+        return
+    os.dup2(_o1, 1); os.dup2(_o2, 2)
+    os.close(_o1); os.close(_o2); os.close(_dn)
+    print("[sign_detector] warmup done", flush=True)
 
 def _contour_arrow_direction(frame, x1, y1, x2, y2):
     """Detecta direccion de flecha por proyeccion de columnas.

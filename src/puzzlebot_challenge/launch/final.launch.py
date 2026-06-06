@@ -86,18 +86,22 @@ def generate_launch_description():
         DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
         # YOLO
         DeclareLaunchArgument('conf_threshold', default_value='0.60', description='Umbral confianza YOLO (0-1)'),
-        DeclareLaunchArgument('min_det_area',   default_value='2500', description='Área mínima bbox para detectar señal [px²]'),
+        DeclareLaunchArgument('min_det_area',   default_value='600',  description='Área mínima bbox para detectar señal [px²]'),
         DeclareLaunchArgument('imgsz',          default_value='320',  description='Tamaño imagen inferencia YOLO'),
         DeclareLaunchArgument('infer_rate_hz',  default_value='5.0',  description='Frecuencia máxima inferencia YOLO [Hz]'),
     ]
 
     # ── 1. Cámara CSI ────────────────────────────────────────────────────────────
+    # output='log': GStreamer/ARGUS/nvbuf C++ libs print directly to stdout via
+    # printf, bypassing any Python-level filter — silencing the whole process is
+    # the only reliable option. Ready status is printed via the ROS2 logger and
+    # visible in the log file (~/.ros/log/.../picam_publisher-1.log).
     picam = Node(
         package='puzzlebot_challenge',
         executable='picam_publisher',
         name='picam_publisher',
         parameters=[camera_cfg],
-        output='screen',
+        output='log',
     )
 
     # ── 2. Detector de línea ─────────────────────────────────────────────────────

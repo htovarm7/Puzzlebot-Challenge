@@ -16,10 +16,12 @@ from cv_bridge import CvBridge
 
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst
+from gi.repository import GLib, Gst
 
-# GStreamer/ARGUS write directly to stderr; ROS2 logger uses stdout — safe to silence
-os.dup2(os.open(os.devnull, os.O_WRONLY), 2)
+# GStreamer/ARGUS plugin messages come via g_print() to stdout.
+# Suppress them with a null print handler; ROS2 logger bypasses this via rcl.
+GLib.set_print_handler(lambda _msg: None)
+GLib.set_printerr_handler(lambda _msg: None)
 
 Gst.init(None)
 
