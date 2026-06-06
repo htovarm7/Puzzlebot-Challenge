@@ -99,10 +99,6 @@ def generate_launch_description():
     ]
 
     # ── 1. Cámara CSI ────────────────────────────────────────────────────────────
-    # output='log': GStreamer/ARGUS/nvbuf C++ libs print directly to stdout via
-    # printf, bypassing any Python-level filter — silencing the whole process is
-    # the only reliable option. Ready status is printed via the ROS2 logger and
-    # visible in the log file (~/.ros/log/.../picam_publisher-1.log).
     picam = Node(
         package='puzzlebot_challenge',
         executable='picam_publisher',
