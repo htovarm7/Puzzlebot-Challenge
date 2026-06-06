@@ -7,20 +7,20 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.3
-KD = 0.08
+KP = 0.45
+KD = 0.10
 KA = 0.2
 
-V_BASE    = 0.2   # m/s cruise speed
-V_MIN     = 0.04   # m/s minimum speed
-OMEGA_MAX = 2.0    # rad/s saturation
+V_BASE    = 0.2    # m/s cruise speed (rectas)
+V_MIN     = 0.05   # m/s velocidad mínima en curvas cerradas
+OMEGA_MAX = 1.5    # rad/s saturación — reducido para giros más suaves
 
 SHIFT_SCALE  = 160.0
 ANGLE_SCALE  = 30.0
-DEADBAND     = 0.06
+DEADBAND     = 0.03   # reducido: corrige desviaciones pequeñas antes de acumularse
 LOST_TIMEOUT = 0.5
 CTRL_DT      = 0.05
-DERIV_ALPHA  = 0.15
+DERIV_ALPHA  = 0.20
 
 
 def clamp(x, lo, hi):
@@ -127,7 +127,13 @@ class LineFollowerNode(Node):
         omega = -(kp * err + kd * self._filtered_d)
         omega = clamp(omega, -omax, omax)
 
-        vl, vr = unicycle_to_wheels(FORWARD_SIGN * v0, FORWARD_SIGN * omega)
+        # Reducir velocidad lineal cuando hay giro pronunciado:
+        # a omega=0 → v=v0 ; a omega=±omax → v=v_min
+        v_min = self.get_parameter("v_min").value
+        speed_factor = 1.0 - clamp(abs(omega) / omax, 0.0, 1.0) * 0.8
+        v = max(v_min, v0 * speed_factor)
+
+        vl, vr = unicycle_to_wheels(FORWARD_SIGN * v, FORWARD_SIGN * omega)
         self._publish_wheels(vl, vr)
 
 
