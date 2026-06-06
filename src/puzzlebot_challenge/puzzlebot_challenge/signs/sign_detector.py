@@ -69,9 +69,12 @@ def _get_model(model_path: str):
 
 
 def _warmup(model, imgsz: int = 320):
+    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
     try:
-        model.warmup(imgsz=(1, 3, imgsz, imgsz))
-        print("[sign_detector] model warmup done")
+        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz,
+                      device="cuda:0" if _INFER_HALF else "cpu",
+                      half=_INFER_HALF)
+        print("[sign_detector] warmup done")
     except Exception as e:
         print(f"[sign_detector] warmup skipped: {e}")
 

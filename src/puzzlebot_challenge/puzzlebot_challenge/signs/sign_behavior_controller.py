@@ -98,7 +98,9 @@ class SignBehaviorController(Node):
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
         self._last_trigger  = {}   # cmd → timestamp del último disparo
-        self._sign_ready    = not bool(self.get_parameter("wait_for_start").value)
+        _wait = self.get_parameter("wait_for_start").value
+        _wait_bool = _wait if isinstance(_wait, bool) else str(_wait).lower() not in ("false", "0", "no")
+        self._sign_ready = not _wait_bool
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
