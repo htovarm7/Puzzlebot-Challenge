@@ -124,13 +124,9 @@ class SignBehaviorController(Node):
 
     def _cb_vel_l(self, msg: Float32):
         self._line_vel_l = float(msg.data)
-        if self._sign_ready and self._state == S_IDLE:
-            self._pub_l.publish(msg)
 
     def _cb_vel_r(self, msg: Float32):
         self._line_vel_r = float(msg.data)
-        if self._sign_ready and self._state == S_IDLE:
-            self._pub_r.publish(msg)
 
     # ── Helpers de publicación ────────────────────────────────────────────────
 
@@ -220,7 +216,7 @@ class SignBehaviorController(Node):
                     self._enter(S_PENDING_RIGHT, cmd)
                 elif cmd == "go_straight":
                     self._enter(S_PENDING_STRAIGHT, cmd)
-            # passthrough ya se hace en _cb_vel_l/_cb_vel_r directamente
+            self._passthrough()
 
         # ── PENDING_GIVE_WAY: sigue línea mientras ve la señal ─────────────
         elif self._state == S_PENDING_GIVE_WAY:
