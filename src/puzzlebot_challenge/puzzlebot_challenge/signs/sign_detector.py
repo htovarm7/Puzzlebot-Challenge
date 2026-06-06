@@ -68,10 +68,9 @@ def _get_model(model_path: str):
     return _YOLO_MODEL
 
 
-def _warmup(model, imgsz: int = 192):
-    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+def _warmup(model, imgsz: int = 320):
     try:
-        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz)
+        model.warmup(imgsz=(1, 3, imgsz, imgsz))
         print("[sign_detector] model warmup done")
     except Exception as e:
         print(f"[sign_detector] warmup skipped: {e}")
@@ -142,10 +141,10 @@ class SignDetectorNode(Node):
         super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.70)
+        self.declare_parameter("conf_threshold", 0.60)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("min_det_area",   3000)  # píxeles — bbox mínima para filtrar ruido
+        self.declare_parameter("min_det_area",   8000)  # píxeles — bbox mínima para filtrar ruido
 
         image_topic      = self.get_parameter("image_topic").value
         self._conf       = float(self.get_parameter("conf_threshold").value)
