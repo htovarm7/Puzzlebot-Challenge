@@ -135,6 +135,9 @@ _SENSOR_QOS = QoSProfile(
 )
 
 
+DEBOUNCE_FRAMES = 3   # frames consecutivos para confirmar detección
+
+
 class SignDetectorNode(Node):
 
     def __init__(self):
@@ -144,21 +147,29 @@ class SignDetectorNode(Node):
         self.declare_parameter("conf_threshold", 0.60)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("min_det_area",   8000)  # píxeles — bbox mínima para filtrar ruido
+        self.declare_parameter("min_det_area",   8000)
 
-        image_topic      = self.get_parameter("image_topic").value
-        self._conf       = float(self.get_parameter("conf_threshold").value)
-        self._imgsz      = int(self.get_parameter("imgsz").value)
-        self._min_area   = int(self.get_parameter("min_det_area").value)
-        model_path       = self.get_parameter("model_path").value
+        image_topic    = self.get_parameter("image_topic").value
+        self._conf     = float(self.get_parameter("conf_threshold").value)
+        self._imgsz    = int(self.get_parameter("imgsz").value)
+        self._min_area = int(self.get_parameter("min_det_area").value)
+        model_path     = self.get_parameter("model_path").value
 
-        self._bridge = CvBridge()
-        self._model  = None
+        self._bridge      = CvBridge()
+        self._model       = None
         self._model_ready = False
 
-        self._latest_dets    = []
-        self._latest_command = "none"
-        self._prev_command   = "none"
+        # hilo de inferencia
+        self._infer_frame  = None
+        self._infer_lock   = threading.Lock()
+        self._infer_event  = threading.Event()
+        self._infer_thread = threading.Thread(
+            target=self._infer_loop, daemon=True)
+
+        # debounce
+        self._pending_cmd    = "none"
+        self._pending_count  = 0
+        self._confirmed_cmd  = "none"
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, _SENSOR_QOS)
@@ -170,7 +181,7 @@ class SignDetectorNode(Node):
         self.get_logger().info(
             f"SignDetector | topic={image_topic} | imgsz={self._imgsz} | "
             f"conf>={self._conf:.0%} | min_area={self._min_area}px | "
-            f"cargando modelo en background...")
+            f"debounce={DEBOUNCE_FRAMES}f | cargando modelo en background...")
 
         threading.Thread(
             target=self._load_model_bg, args=(model_path,), daemon=True
@@ -182,6 +193,7 @@ class SignDetectorNode(Node):
             _warmup(model, self._imgsz)
         self._model = model
         self._model_ready = True
+        self._infer_thread.start()
         status = "ON" if self._model else "OFF (sin modelo)"
         self.get_logger().info(f"SignDetector LISTO | YOLO={status}")
         self.get_logger().info(
@@ -197,47 +209,70 @@ class SignDetectorNode(Node):
             return os.path.join(here, "..", "utils", "best.pt")
 
     def _on_image(self, msg: Image):
+        """Callback ROS2: solo convierte y pasa frame al hilo de inferencia."""
         if not self._model_ready:
             return
-
         try:
             frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as e:
-            self.get_logger().warn(f"Image conversion failed: {e}")
+        except Exception:
             return
+        with self._infer_lock:
+            self._infer_frame = frame   # siempre el más reciente
+        self._infer_event.set()
 
-        try:
-            final_dets = yolo_detect(frame, self._model,
-                                     conf_thr=self._conf,
-                                     imgsz=self._imgsz)
-        except Exception as e:
-            self.get_logger().error(f"[detector] YOLO falló: {e}")
-            return
+    def _infer_loop(self):
+        """Hilo dedicado: inferencia YOLO sin bloquear el spin de ROS2."""
+        while rclpy.ok():
+            self._infer_event.wait()
+            self._infer_event.clear()
 
-        # filtrar por tamaño mínimo (objeto suficientemente cerca)
-        final_dets = [d for d in final_dets if d[3] * d[4] >= self._min_area]
+            with self._infer_lock:
+                frame = self._infer_frame
 
-        if final_dets:
-            best    = max(final_dets, key=lambda d: d[3] * d[4])
-            command = best[0]
-            if command != self._prev_command:
-                self.get_logger().info(
-                    f"DETECTED: {command.upper()} "
-                    f"(conf={best[5]:.0%}, area={best[3]*best[4]}px)")
-        else:
-            command = "none"
+            if frame is None:
+                continue
 
-        if command != self._prev_command:
-            self._prev_command = command
+            try:
+                dets = yolo_detect(frame, self._model,
+                                   conf_thr=self._conf,
+                                   imgsz=self._imgsz)
+            except Exception as e:
+                self.get_logger().error(f"YOLO falló: {e}")
+                continue
 
-        self._latest_dets    = final_dets
-        self._latest_command = command
+            dets = [d for d in dets if d[3] * d[4] >= self._min_area]
+            raw_cmd = dets[0][0] if dets else "none"
+            # tomar la detección de mayor área si hay varias
+            if dets:
+                raw_cmd = max(dets, key=lambda d: d[3] * d[4])[0]
 
-        c_msg = String(); c_msg.data = command
-        d_msg = Bool();   d_msg.data = (command != "none")
-        self.pub_command.publish(c_msg)
-        self.pub_detected.publish(d_msg)
-        self._publish_debug(frame, final_dets, command)
+            # debounce: confirmar tras DEBOUNCE_FRAMES frames consecutivos
+            if raw_cmd == self._pending_cmd:
+                self._pending_count += 1
+            else:
+                self._pending_cmd   = raw_cmd
+                self._pending_count = 1
+
+            if self._pending_count >= DEBOUNCE_FRAMES:
+                command = self._pending_cmd
+            else:
+                command = self._confirmed_cmd  # mantener el último confirmado
+
+            if command != self._confirmed_cmd:
+                self._confirmed_cmd = command
+                best = max(dets, key=lambda d: d[3] * d[4]) if dets else None
+                if best:
+                    self.get_logger().info(
+                        f"DETECTED: {command.upper()} "
+                        f"(conf={best[5]:.0%}, area={best[3]*best[4]}px)")
+                else:
+                    self.get_logger().info("DETECTED: NONE")
+
+            c_msg = String(); c_msg.data = command
+            d_msg = Bool();   d_msg.data = (command != "none")
+            self.pub_command.publish(c_msg)
+            self.pub_detected.publish(d_msg)
+            self._publish_debug(frame, dets, command)
 
     def _publish_debug(self, frame, dets, command):
         if self.pub_debug.get_subscription_count() == 0:
