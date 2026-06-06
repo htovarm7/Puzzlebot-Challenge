@@ -44,6 +44,13 @@ def _find_libgomp() -> str:
     existing = os.environ.get('LD_PRELOAD', '')
     if 'libgomp' in existing:
         return existing
+    # Try known Jetson paths first to avoid slow find
+    for candidate in (
+        '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
+        '/usr/lib/x86_64-linux-gnu/libgomp.so.1',
+    ):
+        if os.path.exists(candidate):
+            return candidate
     for search_cmd in (
         'find /home /usr /opt -name "libgomp*.so*" -path "*/torch*" 2>/dev/null | head -1',
         'find /usr/lib -name "libgomp.so.1" 2>/dev/null | head -1',
