@@ -147,7 +147,7 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return out
 
-DEBOUNCE_FRAMES = 3   # frames consecutivos para confirmar detección
+DEBOUNCE_FRAMES = 2   # frames consecutivos para confirmar detección
 
 
 class SignDetectorNode(Node):

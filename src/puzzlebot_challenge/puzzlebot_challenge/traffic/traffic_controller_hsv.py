@@ -59,6 +59,9 @@ def _load_hsv_yaml(path: str) -> dict | None:
     try:
         with open(p) as f:
             raw = yaml.safe_load(f)
+        # Unwrap ROS2 parameter file format (/**:  ros__parameters:  ...)
+        if len(raw) == 1 and list(raw.values())[0] and 'ros__parameters' in list(raw.values())[0]:
+            raw = list(raw.values())[0]['ros__parameters']
         result = {}
         for color, ranges in raw.items():
             pairs = []
