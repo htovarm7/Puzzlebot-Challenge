@@ -172,14 +172,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. Watchdog de seguridad ─────────────────────────────────────────────────
-    motor_watchdog = Node(
-        package='puzzlebot_challenge',
-        executable='motor_watchdog',
-        name='motor_watchdog',
-        output='screen',
-    )
-
     # Precarga libgomp para evitar error TLS en Jetson + ROS2
     libgomp = _find_libgomp()
     env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
@@ -197,5 +189,4 @@ def generate_launch_description():
         sign_detector,
         line_follower,
         sign_behavior,
-        motor_watchdog,
     ])
