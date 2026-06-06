@@ -142,10 +142,10 @@ class SignDetectorNode(Node):
         super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.80)
+        self.declare_parameter("conf_threshold", 0.70)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("min_det_area",   6000)  # píxeles — objeto debe estar cerca
+        self.declare_parameter("min_det_area",   3000)  # píxeles — bbox mínima para filtrar ruido
 
         image_topic      = self.get_parameter("image_topic").value
         self._conf       = float(self.get_parameter("conf_threshold").value)
