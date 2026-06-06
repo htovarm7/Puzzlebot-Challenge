@@ -142,14 +142,16 @@ class SignDetectorNode(Node):
         super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.65)
+        self.declare_parameter("conf_threshold", 0.80)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
+        self.declare_parameter("min_det_area",   6000)  # píxeles — objeto debe estar cerca
 
-        image_topic = self.get_parameter("image_topic").value
-        self._conf  = float(self.get_parameter("conf_threshold").value)
-        self._imgsz = int(self.get_parameter("imgsz").value)
-        model_path  = self.get_parameter("model_path").value
+        image_topic      = self.get_parameter("image_topic").value
+        self._conf       = float(self.get_parameter("conf_threshold").value)
+        self._imgsz      = int(self.get_parameter("imgsz").value)
+        self._min_area   = int(self.get_parameter("min_det_area").value)
+        model_path       = self.get_parameter("model_path").value
 
         self._bridge = CvBridge()
         self._model  = None
@@ -157,8 +159,7 @@ class SignDetectorNode(Node):
 
         self._latest_dets    = []
         self._latest_command = "none"
-        self._last_status_t  = time.monotonic()
-        self._frames_in      = 0
+        self._prev_command   = "none"
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, _SENSOR_QOS)
@@ -168,8 +169,8 @@ class SignDetectorNode(Node):
         self.pub_debug    = self.create_publisher(Image,  "/vision/signs",  10)
 
         self.get_logger().info(
-            f"SignDetector | topic={image_topic} | "
-            f"imgsz={self._imgsz} | conf>={self._conf:.0%} | "
+            f"SignDetector | topic={image_topic} | imgsz={self._imgsz} | "
+            f"conf>={self._conf:.0%} | min_area={self._min_area}px | "
             f"cargando modelo en background...")
 
         threading.Thread(
@@ -216,14 +217,21 @@ class SignDetectorNode(Node):
             self.get_logger().error(f"[detector] YOLO falló: {e}")
             return
 
+        # filtrar por tamaño mínimo (objeto suficientemente cerca)
+        final_dets = [d for d in final_dets if d[3] * d[4] >= self._min_area]
+
         if final_dets:
             best    = max(final_dets, key=lambda d: d[3] * d[4])
             command = best[0]
-            self.get_logger().info(
-                f"DETECTED: {command.upper()} "
-                f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
+            if command != self._prev_command:
+                self.get_logger().info(
+                    f"DETECTED: {command.upper()} "
+                    f"(conf={best[5]:.0%}, area={best[3]*best[4]}px)")
         else:
             command = "none"
+
+        if command != self._prev_command:
+            self._prev_command = command
 
         self._latest_dets    = final_dets
         self._latest_command = command

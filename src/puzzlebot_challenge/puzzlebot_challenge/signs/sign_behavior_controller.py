@@ -142,13 +142,30 @@ class SignBehaviorController(Node):
 
     # ── Transición de estado ──────────────────────────────────────────────────
 
+    _STATE_MSG = {
+        S_PENDING_GIVE_WAY: "GIVE WAY detectado — acercándose",
+        S_GIVE_WAY:         "GIVE WAY — deteniéndose",
+        S_STOP:             "STOP — detenido",
+        S_STOP_HOLD:        "STOP — hold",
+        S_WORKERS:          "WORKERS — velocidad reducida",
+        S_PENDING_LEFT:     "TURN LEFT detectado — esperando salir del frame",
+        S_PENDING_RIGHT:    "TURN RIGHT detectado — esperando salir del frame",
+        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — esperando salir del frame",
+        S_APPROACH_LEFT:    "TURN LEFT — tramo recto previo",
+        S_APPROACH_RIGHT:   "TURN RIGHT — tramo recto previo",
+        S_TURNING_LEFT:     "TURN LEFT — girando",
+        S_TURNING_RIGHT:    "TURN RIGHT — girando",
+        S_GOING_STRAIGHT:   "GO STRAIGHT — avanzando recto",
+        S_IDLE:             "IDLE — siguiendo línea",
+    }
+
     def _enter(self, state: str, cmd: str = None):
         self._state       = state
         self._state_start = self._now()
         if cmd is not None:
             self._last_trigger[cmd] = self._now()
-        self.get_logger().info(
-            f"[SignBehavior] → {state}" + (f"  (señal: {cmd})" if cmd else ""))
+        msg = self._STATE_MSG.get(state, state)
+        self.get_logger().info(f"[SignBehavior] {msg}")
 
     def _in_cooldown(self, cmd: str) -> bool:
         cooldown = self.get_parameter("sign_cooldown").value

@@ -84,7 +84,8 @@ def generate_launch_description():
         DeclareLaunchArgument('straight_v',     default_value='0.12', description='Velocidad go_straight [m/s]'),
         DeclareLaunchArgument('sign_cooldown',  default_value='4.0',  description='Cooldown entre señales iguales [s]'),
         # YOLO
-        DeclareLaunchArgument('conf_threshold', default_value='0.50', description='Umbral confianza YOLO (0-1)'),
+        DeclareLaunchArgument('conf_threshold', default_value='0.80', description='Umbral confianza YOLO (0-1)'),
+        DeclareLaunchArgument('min_det_area',   default_value='6000', description='Área mínima bbox para detectar señal [px²]'),
         DeclareLaunchArgument('imgsz',          default_value='320',  description='Tamaño imagen inferencia YOLO'),
     ]
 
@@ -124,6 +125,7 @@ def generate_launch_description():
             'image_topic':    '/camera/image_raw',
             'conf_threshold': LaunchConfiguration('conf_threshold'),
             'imgsz':          LaunchConfiguration('imgsz'),
+            'min_det_area':   LaunchConfiguration('min_det_area'),
         }],
         output='screen',
     )
