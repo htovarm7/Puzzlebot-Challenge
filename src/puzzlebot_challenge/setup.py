@@ -47,6 +47,9 @@ setup(
             'sign_detector              = puzzlebot_challenge.signs.sign_detector:main',
             'sign_behavior_controller   = puzzlebot_challenge.signs.sign_behavior_controller:main',
             'sign_viewer                = puzzlebot_challenge.signs.sign_viewer:main',
+            # intersection
+            'intersection_detector   = puzzlebot_challenge.line.intersection_detector:main',
+            'intersection_calibrator = puzzlebot_challenge.line.intersection_calibrator:main',
         ],
     },
 )

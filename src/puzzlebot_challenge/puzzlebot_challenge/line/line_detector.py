@@ -37,8 +37,6 @@ _DEFAULT_PARAMS = {
     "blur":        21,
     "morph":       9,
     "n_track_lines": 3,
-    # Intersection detection: min fraction of frame width a horizontal contour must span
-    "intersection_white_frac": 0.55,
     # Adaptive local threshold mode (1 = on, 0 = classic global)
     # Needs only adapt_block and adapt_c — no T calibration required.
     "adaptive":      0,
@@ -140,7 +138,6 @@ class LineDetection:
         """
         out: dict = {
             "detected":     False,
-            "intersection": False,
             "shift":        0.0,
             "angle":        90.0,
             "T_used":       self._T_state,
@@ -183,17 +180,6 @@ class LineDetection:
         contours = [c for c in contours if cv2.contourArea(c) >= p["min_area"]]
         if not contours:
             return out
-
-        # Intersection detection: look for a contour whose bounding box is wide
-        # and flat — the crossing/stop line taped perpendicular to travel direction.
-        # Criteria: bounding width > 25% of frame AND width > 2× height.
-        frame_w = binary_roi.shape[1]
-        min_span = float(p.get("intersection_white_frac", 0.55)) * frame_w  # reuse param as span fraction
-        out["intersection"] = any(
-            bw >= min_span and bw >= 2.0 * bh
-            for c in contours
-            for (_, _, bw, bh) in [cv2.boundingRect(c)]
-        )
 
         # Keep only the N largest blobs — floor artifacts are always smaller than tape
         n_lines = int(p.get("n_track_lines", 3))
@@ -283,7 +269,6 @@ class LineDetectorNode(Node):
         self.pub_shift         = self.create_publisher(Float32, "/line/shift",        10)
         self.pub_angle         = self.create_publisher(Float32, "/line/angle",        10)
         self.pub_detected      = self.create_publisher(Bool,    "/line/detected",     10)
-        self.pub_intersection  = self.create_publisher(Bool,    "/line/intersection", 10)
         self.pub_debug         = self.create_publisher(Image,   "/vision/line",       10)
 
         self.get_logger().info(
@@ -313,11 +298,9 @@ class LineDetectorNode(Node):
         s_msg = Float32(); s_msg.data = result["shift"]
         a_msg = Float32(); a_msg.data = result["angle"]
         d_msg = Bool();    d_msg.data = result["detected"]
-        i_msg = Bool();    i_msg.data = result["intersection"]
         self.pub_shift.publish(s_msg)
         self.pub_angle.publish(a_msg)
         self.pub_detected.publish(d_msg)
-        self.pub_intersection.publish(i_msg)
 
         self._publish_debug(frame, result)
 
@@ -333,10 +316,9 @@ class LineDetectorNode(Node):
             cv2.drawContours(vis, [r["contour"]], -1, (0, 255, 0), 2)
             cv2.drawContours(vis, [r["box"]],     0, (255, 0, 255), 1)
             cv2.line(vis, r["top_mid"], r["bottom_mid"], (0, 0, 255), 3)
-            intr_tag = "  [INTERSECCION]" if r["intersection"] else ""
             hud = (f"T={r['T_used']}  angle={r['angle']:5.1f}  "
-                   f"shift={r['shift']:+.0f}{intr_tag}")
-            color = (0, 255, 255) if r["intersection"] else (255, 255, 255)
+                   f"shift={r['shift']:+.0f}")
+            color = (255, 255, 255)
         else:
             hud = f"T={r['T_used']}  NO LINE"
             color = (0, 165, 255)
