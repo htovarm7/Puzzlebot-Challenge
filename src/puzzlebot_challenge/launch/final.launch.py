@@ -176,7 +176,10 @@ def generate_launch_description():
 
     # Precarga libgomp para evitar error TLS en Jetson + ROS2
     libgomp = _find_libgomp()
-    env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
+    env_actions = [
+        SetEnvironmentVariable('PYTHONUNBUFFERED', '1'),
+        SetEnvironmentVariable('GST_DEBUG', '0'),
+    ]
     if libgomp:
         env_actions.append(SetEnvironmentVariable('LD_PRELOAD', libgomp))
         env_actions.append(LogInfo(msg=f'[final.launch] LD_PRELOAD={libgomp}'))

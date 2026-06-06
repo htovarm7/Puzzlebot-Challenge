@@ -5,6 +5,7 @@ Usa GStreamer Python (gi) en lugar de cv2.VideoCapture porque el OpenCV
 del Jetson fue compilado sin soporte GStreamer.
 """
 
+import os
 import threading
 import numpy as np
 import cv2
@@ -16,6 +17,9 @@ from cv_bridge import CvBridge
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst
+
+# GStreamer/ARGUS write directly to stderr; ROS2 logger uses stdout — safe to silence
+os.dup2(os.open(os.devnull, os.O_WRONLY), 2)
 
 Gst.init(None)
 
@@ -60,7 +64,7 @@ class PiCamPublisher(Node):
             self._out_w, self._out_h,
         )
 
-        self.get_logger().info(f"Abriendo PiCam (gi/GStreamer): {pipeline_str}")
+        self.get_logger().info("Abriendo PiCam (gi/GStreamer)...")
 
         self._pipeline = Gst.parse_launch(pipeline_str)
         if self._pipeline is None:

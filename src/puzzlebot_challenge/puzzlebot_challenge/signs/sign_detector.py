@@ -57,7 +57,16 @@ def _get_model(model_path: str):
     try:
         import sys, traceback, torch
         from ultralytics import YOLO
-        _YOLO_MODEL = YOLO(load_path)
+        # TensorRT C++ logger writes to stderr — suppress during load, restore after
+        _devnull = os.open(os.devnull, os.O_WRONLY)
+        _old_stderr = os.dup(2)
+        os.dup2(_devnull, 2)
+        try:
+            _YOLO_MODEL = YOLO(load_path, task='detect')
+        finally:
+            os.dup2(_old_stderr, 2)
+            os.close(_old_stderr)
+            os.close(_devnull)
         _INFER_HALF = torch.cuda.is_available()
         print(f"[sign_detector] model loaded — CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
