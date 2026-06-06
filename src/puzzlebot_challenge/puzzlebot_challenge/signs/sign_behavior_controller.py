@@ -13,7 +13,7 @@ Arquitectura de tópicos:
 Comportamientos:
   give_way    → sigue la línea mientras ve la señal; al perderla, para 2 s y continúa
   stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
-  workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
+  workers     → reducir velocidad al WORKERS_FACTOR durante WORKERS_TIME segundos
   turn_left   → al DEJAR de ver la señal, girar a la izquierda en la intersección
   turn_right  → al DEJAR de ver la señal, girar a la derecha en la intersección
   go_straight → al DEJAR de ver la señal, avanzar recto siguiendo la línea
@@ -31,7 +31,8 @@ FORWARD_SIGN = -1   # velocidad de rueda positiva = avance
 # ── Parámetros por defecto ────────────────────────────────────────────────────
 GIVE_WAY_STOP_TIME = 2.0   # s — duración de la parada en give_way
 STOP_HOLD_TIME     = 1.0   # s — espera extra tras desaparecer el stop
-WORKERS_FACTOR     = 0.5   # factor de velocidad con señal de workers visible
+WORKERS_FACTOR     = 0.5   # factor de velocidad con señal de workers
+WORKERS_TIME       = 3.0   # s — duración de la reducción de velocidad en workers
 APPROACH_TIME      = 0.4   # s — avance recto antes del giro
 TURN_TIME          = 1.8   # s — duración del giro
 TURN_OMEGA         = 0.7   # rad/s — velocidad angular del giro
@@ -72,6 +73,7 @@ class SignBehaviorController(Node):
         self.declare_parameter("give_way_stop_time", GIVE_WAY_STOP_TIME)
         self.declare_parameter("stop_hold_time",     STOP_HOLD_TIME)
         self.declare_parameter("workers_factor",     WORKERS_FACTOR)
+        self.declare_parameter("workers_time",       WORKERS_TIME)
         self.declare_parameter("approach_time",      APPROACH_TIME)
         self.declare_parameter("turn_time",          TURN_TIME)
         self.declare_parameter("turn_omega",         TURN_OMEGA)
@@ -194,6 +196,7 @@ class SignBehaviorController(Node):
         gw_time  = p("give_way_stop_time").value
         sh_time  = p("stop_hold_time").value
         wk_fact  = p("workers_factor").value
+        wk_time  = p("workers_time").value
         app_time = p("approach_time").value
         t_time   = p("turn_time").value
         t_omg    = p("turn_omega").value
@@ -246,14 +249,14 @@ class SignBehaviorController(Node):
             else:
                 self._enter(S_IDLE)
 
-        # ── WORKERS: reduce velocidad mientras la señal esté visible ───────
+        # ── WORKERS: reduce velocidad durante wk_time segundos ────────────
         elif self._state == S_WORKERS:
-            if not detected:
-                self._enter(S_IDLE)
-                self._passthrough()
-            else:
+            if elapsed < wk_time:
                 self._publish(self._line_vel_l * wk_fact,
                               self._line_vel_r * wk_fact)
+            else:
+                self._enter(S_IDLE)
+                self._passthrough()
 
         # ── PENDING_*: espera a que la señal desaparezca ───────────────────
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
