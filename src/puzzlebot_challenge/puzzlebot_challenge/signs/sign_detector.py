@@ -207,8 +207,6 @@ class SignDetectorNode(Node):
             self.get_logger().warn(f"Image conversion failed: {e}")
             return
 
-        self._frames_in += 1
-
         try:
             final_dets = yolo_detect(frame, self._model,
                                      conf_thr=self._conf,
