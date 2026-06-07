@@ -30,3 +30,5 @@ Thumbs.db
 training/Traffic-Signals*/
 training/runs/
 training/*.pt
+
+/env
