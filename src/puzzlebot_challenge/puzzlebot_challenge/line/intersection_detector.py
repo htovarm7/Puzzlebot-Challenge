@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
 """
-intersection_detector.py  (v2 — dash grouping)
+intersection_detector.py  (v3 — Inverse Perspective Mapping + dash grouping)
 
 Detects DASHED intersection markings and reports which arms exist
 (front / back / left / right), separately from the line-following module.
 
-Why v2
-------
-Judging blobs individually cannot tell a real dash from a fragment of a
-solid line — both look like short elongated marks. v2 GROUPS collinear
-segments into candidate lines, then decides DASHED vs SOLID per group:
-
-  * fill_ratio   = sum(segment lengths) / span of the group.
-                   Dashed lines have gaps  -> ~0.3..0.7
-                   Solid lines tile fully  -> ~0.95..1.0   (rejected)
-  * straightness = max perpendicular residual from a fitted line.
-                   Curves (e.g. a curved lane boundary) -> large (rejected)
-
-Arms come from the ACCEPTED dashed lines (orientation + position), not
-from loose per-blob votes.
+Pipeline
+--------
+1. IPM warp        : perspective transform from 4 floor points -> bird's-eye.
+                     Dashes become uniform; forward/left/right become
+                     orthogonal; an intersection becomes a square, not a
+                     trapezoid. (Toggle with ipm_enable; falls back to an
+                     ROI crop on the raw frame when off.)
+2. Threshold+morph : adaptive threshold, opening/closing to clean speckle.
+3. Segments        : contours filtered by area + aspect -> dash blobs.
+4. Grouping        : collinear blobs merged into candidate lines.
+5. Dashed vs solid : fill_ratio (covered/span) + straightness residual.
+                       dashed -> gaps, low fill, straight.
+                       solid  -> fills its span (~1.0)  -> rejected.
+                       curve  -> high residual          -> rejected.
+6. Arms            : in the warped view, vertical lines in the centre =>
+                     forward/back; horizontal lines reaching the side
+                     zones => left/right.
+7. Debounce        : in the node, confirm over several frames.
 
 Topics (unchanged)
 ------------------
 Sub : /camera/image_raw       (sensor_msgs/Image)
 Pub : /intersection/detected  (std_msgs/Bool)
       /intersection/arms       (std_msgs/String)   "front,left,right" | "none"
-      /vision/intersection     (sensor_msgs/Image)
+      /vision/intersection     (sensor_msgs/Image)  warped annotated view
 """
 
 from __future__ import annotations
@@ -47,34 +51,45 @@ from cv_bridge import CvBridge
 ARM_ORDER = ("front", "back", "left", "right")
 
 _DEFAULT_PARAMS = {
-    # ── Preprocessing ──────────────────────────────────────────────────
+    # ── Inverse Perspective Mapping (bird's-eye) ───────────────────────
+    "ipm_enable":         1,
+    "src_top_x":          0.30,   # top edge spans x in [src_top_x, 1-src_top_x]
+    "src_top_y":          0.62,   # y of the FAR (top) edge of the road quad
+    "src_bot_x":          0.02,   # bottom edge spans x in [src_bot_x, 1-src_bot_x]
+    "src_bot_y":          0.98,   # y of the NEAR (bottom) edge
+    "warp_w":             360,    # bird's-eye output width
+    "warp_h":             480,    # bird's-eye output height
+
+    # ── Fallback ROI (used only when ipm_enable = 0) ───────────────────
     "roi_top":            0.45,
+
+    # ── Threshold + morphology ─────────────────────────────────────────
     "blur":               5,
     "adapt_block":        41,
     "adapt_c":            10,
     "morph":              3,
 
-    # ── Per-segment filtering (generous; grouping does the real work) ──
+    # ── Per-segment filtering ──────────────────────────────────────────
     "seg_min_area":       40.0,
-    "seg_max_area":       6000.0,   # drop only a huge INTACT solid blob
+    "seg_max_area":       6000.0,
     "seg_min_aspect":     1.5,
 
-    # ── Grouping collinear segments into candidate lines ───────────────
-    "group_angle_tol":    18.0,     # max orientation diff to share a line (deg)
-    "group_perp_tol":     22.0,     # max perpendicular distance to group line (px)
-    "min_dashes_in_line": 4,        # members needed to call it a line
+    # ── Grouping collinear segments ────────────────────────────────────
+    "group_angle_tol":    18.0,
+    "group_perp_tol":     22.0,
+    "min_dashes_in_line": 4,
 
     # ── DASHED vs SOLID / curve discrimination ─────────────────────────
-    "min_fill_ratio":     0.12,     # covered/span below this -> scattered noise
-    "max_fill_ratio":     0.88,     # above this -> solid line (tiles its span)
-    "max_resid_px":       18.0,     # line-fit residual above this -> a curve
+    "min_fill_ratio":     0.12,
+    "max_fill_ratio":     0.88,
+    "max_resid_px":       18.0,
 
-    # ── Arm geometry (fractions) ───────────────────────────────────────
+    # ── Zones (fractions of the WORK image: warped, or ROI if ipm off) ─
     "left_edge":          0.33,
     "right_edge":         0.66,
-    "front_edge":         0.45,     # center line above this (far) -> FRONT
-    "back_edge":          0.85,     # center line below this (near) -> BACK
-    "horiz_vert_split":   45.0,     # <= this from horizontal -> "crossing" line
+    "front_edge":         0.45,
+    "back_edge":          0.85,
+    "horiz_vert_split":   45.0,
 
     # ── Decision / stabilisation ───────────────────────────────────────
     "min_lines_per_arm":  1,
@@ -99,13 +114,35 @@ def _load_params_yaml(path: str) -> dict | None:
 
 
 def _angle_diff(a: float, b: float) -> float:
-    """Difference between two orientations in [0,180) -> result in [0,90]."""
     d = abs(a - b) % 180.0
     return min(d, 180.0 - d)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Pure-CV core (no ROS) — imported by the calibrator.
+def src_quad(frame_shape, params) -> np.ndarray:
+    """The 4 source floor points (TL, TR, BR, BL) in raw-image pixels."""
+    H, W = frame_shape[:2]
+    stx = float(params["src_top_x"]) * W
+    sty = float(params["src_top_y"]) * H
+    sbx = float(params["src_bot_x"]) * W
+    sby = float(params["src_bot_y"]) * H
+    return np.float32([[stx, sty], [W - stx, sty],
+                       [W - sbx, sby], [sbx, sby]])
+
+
+def draw_src_quad(frame: np.ndarray, params: dict) -> np.ndarray:
+    """For the calibrator: show the IPM source region on the raw frame."""
+    vis = frame.copy()
+    quad = src_quad(frame.shape, params).astype(int)
+    cv2.polylines(vis, [quad], True, (0, 255, 255), 2)
+    for (x, y), lbl in zip(quad, ("TL", "TR", "BR", "BL")):
+        cv2.circle(vis, (x, y), 4, (0, 0, 255), -1)
+        cv2.putText(vis, lbl, (x + 5, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+    cv2.putText(vis, "IPM source quad (warp these 4 floor points)",
+                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+    return vis
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class IntersectionDetection:
 
@@ -116,8 +153,6 @@ class IntersectionDetection:
 
     @staticmethod
     def _orientation(box: np.ndarray) -> tuple[float, float, float]:
-        """(length, width, angle_deg) of an oriented box.
-        angle: 0 = horizontal, 90 = vertical, range [0,180)."""
         e0 = box[1] - box[0]
         e1 = box[2] - box[1]
         n0 = float(np.linalg.norm(e0))
@@ -129,8 +164,30 @@ class IntersectionDetection:
         angle = float(np.degrees(np.arctan2(long_vec[1], long_vec[0]))) % 180.0
         return length, max(width, 1.0), angle
 
-    # ---- step 1: extract candidate segments ---------------------------------
-    def _segments(self, binary: np.ndarray, roi_y: int) -> list[dict]:
+    # ---- stage 1: produce the work image (warped or ROI) --------------------
+    def _work_image(self, frame_bgr: np.ndarray):
+        """Returns (canvas_bgr, work_gray, oy, Pw, Ph).
+        canvas = image to annotate; work_gray = image to threshold;
+        oy = y offset from work coords -> canvas coords;
+        Pw, Ph = work image dimensions (zone reference)."""
+        p = self.params
+        H, W = frame_bgr.shape[:2]
+        if int(p["ipm_enable"]):
+            Ww = max(60, int(p["warp_w"]))
+            Wh = max(60, int(p["warp_h"]))
+            src = src_quad(frame_bgr.shape, p)
+            dst = np.float32([[0, 0], [Ww, 0], [Ww, Wh], [0, Wh]])
+            M = cv2.getPerspectiveTransform(src, dst)
+            warped = cv2.warpPerspective(frame_bgr, M, (Ww, Wh))
+            gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+            return warped, gray, 0, Ww, Wh
+        # fallback: ROI crop on raw frame
+        roi_y = max(0, min(int(H * float(p["roi_top"])), H - 2))
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        return frame_bgr.copy(), gray[roi_y:, :], roi_y, W, (H - roi_y)
+
+    # ---- stage 3: segments --------------------------------------------------
+    def _segments(self, binary: np.ndarray, oy: int) -> list[dict]:
         p = self.params
         contours, _ = cv2.findContours(
             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -140,7 +197,7 @@ class IntersectionDetection:
             if area < float(p["seg_min_area"]) or area > float(p["seg_max_area"]):
                 continue
             rect = cv2.minAreaRect(c)
-            box = cv2.boxPoints(rect)            # ROI coords (float)
+            box = cv2.boxPoints(rect)            # work coords
             length, width, angle = self._orientation(box)
             if length / width < float(p["seg_min_aspect"]):
                 continue
@@ -148,13 +205,13 @@ class IntersectionDetection:
             segs.append({
                 "cx": float(cx), "cy": float(cy),
                 "angle": angle, "length": length,
-                "box_roi": box,
-                "box_global": (box + np.array([0, roi_y])).astype(int),
-                "group": -1, "status": "loose",
+                "box_work": box,
+                "box_canvas": (box + np.array([0, oy])).astype(int),
+                "status": "loose",
             })
         return segs
 
-    # ---- step 2: greedy collinear grouping ----------------------------------
+    # ---- stage 4: greedy collinear grouping ---------------------------------
     def _group(self, segs: list[dict]) -> list[list[int]]:
         p = self.params
         atol = float(p["group_angle_tol"])
@@ -170,7 +227,7 @@ class IntersectionDetection:
             members = [i]
             a = np.radians(seed["angle"])
             dirx, diry = np.cos(a), np.sin(a)
-            nx, ny = -diry, dirx          # unit normal
+            nx, ny = -diry, dirx
             px, py = seed["cx"], seed["cy"]
             for j in order:
                 if used[j]:
@@ -186,7 +243,7 @@ class IntersectionDetection:
             groups.append(members)
         return groups
 
-    # ---- step 3: classify a group as a dashed line --------------------------
+    # ---- stage 5: classify a group as a dashed line -------------------------
     def _classify(self, members: list[int], segs: list[dict]) -> dict:
         p = self.params
         n = len(members)
@@ -202,14 +259,11 @@ class IntersectionDetection:
         base = np.array([x0, y0])
         dirv = np.array([vx, vy])
         nrm = np.array([-vy, vx])
-
-        # straightness residual (centroids vs fitted line)
         resid = float(np.max(np.abs((pts - base) @ nrm)))
 
-        # fill ratio + endpoints from projecting each member's box corners
         a_all, b_all, covered = [], [], 0.0
         for m in members:
-            proj = (segs[m]["box_roi"] - base) @ dirv
+            proj = (segs[m]["box_work"] - base) @ dirv
             a, b = float(proj.min()), float(proj.max())
             covered += (b - a)
             a_all.append(a)
@@ -229,26 +283,26 @@ class IntersectionDetection:
         )
         return info
 
-    # ---- step 4: arm assignment for one accepted dashed line ----------------
-    def _arms_of_line(self, info: dict, W: int, Hroi: int) -> set[str]:
+    # ---- stage 6: arm assignment (in work coords) ---------------------------
+    def _arms_of_line(self, info: dict, Pw: int, Ph: int) -> set[str]:
         p = self.params
         arms: set[str] = set()
         pa, pb = info["pa"], info["pb"]
         xs = (pa[0], pb[0])
         ys = (pa[1], pb[1])
         midx, midy = float(np.mean(xs)), float(np.mean(ys))
-        lx, rx = float(p["left_edge"]) * W, float(p["right_edge"]) * W
-        fy, by = float(p["front_edge"]) * Hroi, float(p["back_edge"]) * Hroi
+        lx, rx = float(p["left_edge"]) * Pw, float(p["right_edge"]) * Pw
+        fy, by = float(p["front_edge"]) * Ph, float(p["back_edge"]) * Ph
 
         d_to_horiz = min(info["angle"], 180.0 - info["angle"])
         horizontal = d_to_horiz <= float(p["horiz_vert_split"])
 
-        if horizontal:                      # a crossing line -> lateral road
+        if horizontal:                      # crossing line -> lateral road
             if min(xs) < lx:
                 arms.add("left")
             if max(xs) > rx:
                 arms.add("right")
-        else:                               # runs forward/back -> a branch lane
+        else:                               # runs forward/back -> branch lane
             if midx < lx:
                 arms.add("left")
             elif midx > rx:
@@ -267,28 +321,24 @@ class IntersectionDetection:
             "detected": False,
             "arms":     {a: False for a in ARM_ORDER},
             "counts":   {a: 0 for a in ARM_ORDER},
-            "segments": [],
-            "lines":    [],          # accepted dashed lines (for overlay)
-            "roi_y":    0,
-            "binary":   None,
+            "segments": [], "lines": [],
+            "canvas": None, "binary": None,
+            "oy": 0, "pw": 0, "ph": 0,
+            "ipm": bool(int(p["ipm_enable"])),
         }
         if frame_bgr is None or frame_bgr.size == 0:
             return out
 
-        H, W = frame_bgr.shape[:2]
-        roi_y = max(0, min(int(H * float(p["roi_top"])), H - 2))
-        out["roi_y"] = roi_y
+        canvas, work_gray, oy, Pw, Ph = self._work_image(frame_bgr)
+        out["canvas"] = canvas
+        out["oy"], out["pw"], out["ph"] = oy, Pw, Ph
 
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         k = int(p["blur"]) | 1
         if k >= 3:
-            gray = cv2.GaussianBlur(gray, (k, k), 0)
-        roi = gray[roi_y:, :]
-        Hroi = roi.shape[0]
-
+            work_gray = cv2.GaussianBlur(work_gray, (k, k), 0)
         block = max(3, int(p["adapt_block"]) | 1)
         binary = cv2.adaptiveThreshold(
-            roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            work_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, block, float(p["adapt_c"]))
         mk = int(p["morph"])
         if mk >= 2:
@@ -297,7 +347,7 @@ class IntersectionDetection:
             binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         out["binary"] = binary
 
-        segs = self._segments(binary, roi_y)
+        segs = self._segments(binary, oy)
         groups = self._group(segs)
 
         vote = {a: 0 for a in ARM_ORDER}
@@ -307,14 +357,14 @@ class IntersectionDetection:
                 for m in members:
                     segs[m]["status"] = "rejected"
                 continue
-            line_arms = self._arms_of_line(info, W, Hroi)
+            line_arms = self._arms_of_line(info, Pw, Ph)
             for a in line_arms:
                 vote[a] += 1
             for m in members:
                 segs[m]["status"] = "accepted"
             out["lines"].append({
-                "pa": (int(info["pa"][0]), int(info["pa"][1] + roi_y)),
-                "pb": (int(info["pb"][0]), int(info["pb"][1] + roi_y)),
+                "pa": (int(info["pa"][0]), int(info["pa"][1] + oy)),
+                "pb": (int(info["pb"][0]), int(info["pb"][1] + oy)),
                 "arms": sorted(line_arms),
                 "fill": info["fill"], "resid": info["resid"], "n": info["n"],
             })
@@ -324,7 +374,7 @@ class IntersectionDetection:
             out["counts"][a] = vote[a]
             out["arms"][a] = vote[a] >= thr
         out["detected"] = any(out["arms"].values())
-        out["segments"] = [{"box": s["box_global"], "status": s["status"]}
+        out["segments"] = [{"box": s["box_canvas"], "status": s["status"]}
                            for s in segs]
         return out
 
@@ -335,22 +385,20 @@ def arms_to_str(arms: dict) -> str:
 
 
 def draw_overlay(frame: np.ndarray, r: dict, params: dict) -> np.ndarray:
-    vis = frame.copy()
-    H, W = vis.shape[:2]
-    roi_y = r["roi_y"]
-    Hroi = H - roi_y
+    canvas = r.get("canvas")
+    vis = (canvas if canvas is not None else frame).copy()
+    oy, Pw, Ph = r["oy"], r["pw"], r["ph"]
 
-    cv2.line(vis, (0, roi_y), (W, roi_y), (255, 200, 0), 1)
-    lx = int(float(params["left_edge"]) * W)
-    rx = int(float(params["right_edge"]) * W)
-    fy = roi_y + int(float(params["front_edge"]) * Hroi)
-    by = roi_y + int(float(params["back_edge"]) * Hroi)
-    cv2.line(vis, (lx, roi_y), (lx, H), (120, 120, 120), 1)
-    cv2.line(vis, (rx, roi_y), (rx, H), (120, 120, 120), 1)
+    lx = int(float(params["left_edge"]) * Pw)
+    rx = int(float(params["right_edge"]) * Pw)
+    fy = oy + int(float(params["front_edge"]) * Ph)
+    by = oy + int(float(params["back_edge"]) * Ph)
+    cv2.line(vis, (0, oy), (vis.shape[1], oy), (255, 200, 0), 1)
+    cv2.line(vis, (lx, oy), (lx, oy + Ph), (120, 120, 120), 1)
+    cv2.line(vis, (rx, oy), (rx, oy + Ph), (120, 120, 120), 1)
     cv2.line(vis, (lx, fy), (rx, fy), (120, 120, 120), 1)
     cv2.line(vis, (lx, by), (rx, by), (120, 120, 120), 1)
 
-    # segments: green=accepted dash, red=rejected group, gray=loose
     for s in r["segments"]:
         if s["status"] == "accepted":
             color = (0, 255, 0)
@@ -360,27 +408,25 @@ def draw_overlay(frame: np.ndarray, r: dict, params: dict) -> np.ndarray:
             color = (110, 110, 110)
         cv2.drawContours(vis, [s["box"]], 0, color, 2)
 
-    # accepted dashed lines: spine + label
     for ln in r["lines"]:
         cv2.line(vis, ln["pa"], ln["pb"], (0, 255, 0), 2)
         label = "".join(a[0].upper() for a in ln["arms"]) or "-"
         mid = ((ln["pa"][0] + ln["pb"][0]) // 2, (ln["pa"][1] + ln["pb"][1]) // 2)
-        cv2.putText(vis, f"{label} f{ln['fill']:.2f}", (mid[0] - 20, mid[1] - 6),
+        cv2.putText(vis, f"{label} f{ln['fill']:.2f}", (mid[0] - 18, mid[1] - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
     cnt = r["counts"]
     tag = arms_to_str(r["arms"]).upper()
-    hud = (f"ARMS: {tag}   F{cnt['front']} B{cnt['back']} "
+    mode = "IPM" if r.get("ipm") else "ROI"
+    hud = (f"[{mode}] ARMS: {tag}   F{cnt['front']} B{cnt['back']} "
            f"L{cnt['left']} R{cnt['right']}   lines={len(r['lines'])}")
     color = (0, 255, 0) if r["detected"] else (0, 165, 255)
-    cv2.rectangle(vis, (0, 0), (W, 26), (40, 40, 40), -1)
+    cv2.rectangle(vis, (0, 0), (vis.shape[1], 26), (40, 40, 40), -1)
     cv2.putText(vis, hud, (8, 19),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return vis
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ROS2 node (unchanged wiring; generic param loop adapts to new keys)
 # ─────────────────────────────────────────────────────────────────────────────
 class IntersectionDetectorNode(Node):
 
@@ -420,16 +466,16 @@ class IntersectionDetectorNode(Node):
         self._confirmed = "none"
 
         image_topic = self.get_parameter("image_topic").value
-        self.sub_img       = self.create_subscription(
+        self.sub_img      = self.create_subscription(
             Image, image_topic, self._on_image, 10)
-        self.pub_detected  = self.create_publisher(Bool,   "/intersection/detected", 10)
-        self.pub_arms      = self.create_publisher(String, "/intersection/arms",     10)
-        self.pub_debug     = self.create_publisher(Image,  "/vision/intersection",   10)
+        self.pub_detected = self.create_publisher(Bool,   "/intersection/detected", 10)
+        self.pub_arms     = self.create_publisher(String, "/intersection/arms",     10)
+        self.pub_debug    = self.create_publisher(Image,  "/vision/intersection",   10)
 
         self.get_logger().info(
-            f"IntersectionDetectorNode (v2 grouping) ready | topic={image_topic} | "
-            f"roi_top={self.detector.params['roi_top']:.2f} | "
-            f"min_dashes_in_line={int(self.detector.params['min_dashes_in_line'])}")
+            f"IntersectionDetectorNode (v3 IPM) ready | topic={image_topic} | "
+            f"ipm={'on' if int(self.detector.params['ipm_enable']) else 'off'} | "
+            f"warp={int(self.detector.params['warp_w'])}x{int(self.detector.params['warp_h'])}")
 
     def _snapshot_params(self) -> dict:
         return {k: self.get_parameter(k).value for k in _DEFAULT_PARAMS}
@@ -460,7 +506,7 @@ class IntersectionDetectorNode(Node):
         self.pub_detected.publish(d_msg)
         self.pub_arms.publish(a_msg)
 
-        if self.pub_debug.get_subscription_count() > 0:
+        if self.pub_debug.get_subscription_count() > 0 and r["canvas"] is not None:
             vis = draw_overlay(frame, r, self.detector.params)
             out_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
             out_msg.header.stamp = self.get_clock().now().to_msg()
