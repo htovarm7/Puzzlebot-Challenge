@@ -25,3 +25,8 @@ Thumbs.db
 *.png
 !docs/**/*.png
 !docs/**/*.jpg
+
+# YOLO training artifacts (datasets, runs, downloaded checkpoints)
+training/Traffic-Signals*/
+training/runs/
+training/*.pt
