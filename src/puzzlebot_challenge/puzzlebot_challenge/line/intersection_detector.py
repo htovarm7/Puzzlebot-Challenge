@@ -62,12 +62,12 @@ _DEFAULT_PARAMS = {
     # ── Grouping collinear segments into candidate lines ───────────────
     "group_angle_tol":    18.0,     # max orientation diff to share a line (deg)
     "group_perp_tol":     22.0,     # max perpendicular distance to group line (px)
-    "min_dashes_in_line": 3,        # members needed to call it a line
+    "min_dashes_in_line": 4,        # members needed to call it a line
 
     # ── DASHED vs SOLID / curve discrimination ─────────────────────────
     "min_fill_ratio":     0.12,     # covered/span below this -> scattered noise
-    "max_fill_ratio":     0.75,     # above this -> solid line (tiles its span)
-    "max_resid_px":       14.0,     # line-fit residual above this -> a curve
+    "max_fill_ratio":     0.88,     # above this -> solid line (tiles its span)
+    "max_resid_px":       18.0,     # line-fit residual above this -> a curve
 
     # ── Arm geometry (fractions) ───────────────────────────────────────
     "left_edge":          0.33,

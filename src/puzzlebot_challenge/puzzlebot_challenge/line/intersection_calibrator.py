@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """
-intersection_calibrator.py
-==========================
-Interactive parameter tuner for the DASHED-intersection detector.
+intersection_calibrator.py  (v2 — dash grouping)
 
-It reuses the EXACT detection core from `intersection_detector` so whatever
-you see in the tuner is what the node will do at runtime.
+Interactive tuner for the dashed-intersection detector. Reuses the EXACT
+detection core from `intersection_detector`, so the tuner preview matches
+the runtime node.
 
 Modes
 -----
   --live              Subscribe to /camera/image_raw (ROS2)        ← preferred
   --image PATH        Static image or video file
-  (no flag)           Open default webcam (cv.VideoCapture(0))
+  (no flag)           Open default webcam
 
 Keys
 ----
-  q       quit
-  s       save params to intersection_params.yaml (consumed by the node)
-  r       reset trackbars to defaults
-  space   pause / unpause (no effect in live mode)
+  q quit   s save   r reset   space pause (file/webcam only)
 
 Usage
 -----
@@ -35,12 +31,11 @@ import cv2 as cv
 import numpy as np
 import yaml
 
-# Single source of truth: import the runtime detector + renderer.
 try:
     from puzzlebot_challenge.line.intersection_detector import (
         IntersectionDetection, draw_overlay, _DEFAULT_PARAMS,
     )
-except Exception:  # allow running as a bare script outside the installed pkg
+except Exception:
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from intersection_detector import (  # type: ignore
@@ -56,38 +51,38 @@ def nothing(_):
     pass
 
 
-# Trackbars are integers, so floats are stored scaled (x100 / x10).
-# (name, max, scale, param_key)  — scale = factor to divide trackbar by.
+# (label, trackbar_max, scale, param_key)   value = trackbar / scale
 _TRACKBARS = [
-    ("roi_top %",        99,    100.0, "roi_top"),
-    ("blur (odd)",       31,    1.0,   "blur"),
-    ("adapt_block(odd)", 151,   1.0,   "adapt_block"),
-    ("adapt_c",          40,    1.0,   "adapt_c"),
-    ("morph",            15,    1.0,   "morph"),
-    ("dash_min_area",    2000,  1.0,   "dash_min_area"),
-    ("dash_max_area",    20000, 1.0,   "dash_max_area"),
-    ("dash_min_asp x10", 200,   10.0,  "dash_min_aspect"),
-    ("dash_max_asp x10", 300,   10.0,  "dash_max_aspect"),
-    ("left_edge %",      99,    100.0, "left_edge"),
-    ("right_edge %",     99,    100.0, "right_edge"),
-    ("front_edge %",     99,    100.0, "front_edge"),
-    ("back_edge %",      99,    100.0, "back_edge"),
-    ("min_dashes_side",  20,    1.0,   "min_dashes_side"),
-    ("min_dashes_front", 20,    1.0,   "min_dashes_front"),
-    ("min_dashes_back",  20,    1.0,   "min_dashes_back"),
-    ("use_orientation",  1,     1.0,   "use_orientation"),
-    ("horiz_tol_deg",    90,    1.0,   "horiz_tol_deg"),
-    ("vert_tol_deg",     90,    1.0,   "vert_tol_deg"),
-    ("debounce",         10,    1.0,   "debounce"),
+    ("roi_top %",          99,    100.0, "roi_top"),
+    ("blur (odd)",         31,    1.0,   "blur"),
+    ("adapt_block(odd)",   151,   1.0,   "adapt_block"),
+    ("adapt_c",            40,    1.0,   "adapt_c"),
+    ("morph",              15,    1.0,   "morph"),
+    ("seg_min_area",       2000,  1.0,   "seg_min_area"),
+    ("seg_max_area",       20000, 1.0,   "seg_max_area"),
+    ("seg_min_asp x10",    200,   10.0,  "seg_min_aspect"),
+    ("group_angle_tol",    90,    1.0,   "group_angle_tol"),
+    ("group_perp_tol",     120,   1.0,   "group_perp_tol"),
+    ("min_dashes_in_line", 15,    1.0,   "min_dashes_in_line"),
+    ("min_fill %",         100,   100.0, "min_fill_ratio"),
+    ("max_fill %",         100,   100.0, "max_fill_ratio"),
+    ("max_resid px",       60,    1.0,   "max_resid_px"),
+    ("left_edge %",        99,    100.0, "left_edge"),
+    ("right_edge %",       99,    100.0, "right_edge"),
+    ("front_edge %",       99,    100.0, "front_edge"),
+    ("back_edge %",        99,    100.0, "back_edge"),
+    ("horiz/vert split",   90,    1.0,   "horiz_vert_split"),
+    ("min_lines_per_arm",  5,     1.0,   "min_lines_per_arm"),
+    ("debounce",           10,    1.0,   "debounce"),
 ]
 
 
-def _to_trackbar(key: str, scale: float, saved: dict) -> int:
+def _to_trackbar(key, scale, saved):
     val = saved.get(key, _DEFAULT_PARAMS[key])
     return int(round(float(val) * scale))
 
 
-def _load_saved(yaml_path: Path | None) -> dict:
+def _load_saved(yaml_path):
     if not yaml_path or not yaml_path.exists():
         return {}
     try:
@@ -100,10 +95,10 @@ def _load_saved(yaml_path: Path | None) -> dict:
         return {}
 
 
-def build_window(yaml_path: Path | None = None):
+def build_window(yaml_path=None):
     saved = _load_saved(yaml_path)
     cv.namedWindow(WIN_CTRL, cv.WINDOW_NORMAL)
-    cv.resizeWindow(WIN_CTRL, 480, 720)
+    cv.resizeWindow(WIN_CTRL, 480, 760)
     for name, vmax, scale, key in _TRACKBARS:
         init = min(_to_trackbar(key, scale, saved), vmax)
         cv.createTrackbar(name, WIN_CTRL, max(0, init), vmax, nothing)
@@ -115,7 +110,7 @@ def reset_window():
         cv.setTrackbarPos(name, WIN_CTRL, max(0, init))
 
 
-def read_params() -> dict:
+def read_params():
     p = {}
     for name, vmax, scale, key in _TRACKBARS:
         raw = cv.getTrackbarPos(name, WIN_CTRL)
@@ -128,22 +123,17 @@ def read_params() -> dict:
         p["right_edge"] = min(0.99, p["left_edge"] + 0.01)
     if p["front_edge"] >= p["back_edge"]:
         p["back_edge"] = min(0.99, p["front_edge"] + 0.01)
-    if p["dash_min_aspect"] >= p["dash_max_aspect"]:
-        p["dash_max_aspect"] = p["dash_min_aspect"] + 0.1
-    if p["dash_min_area"] >= p["dash_max_area"]:
-        p["dash_max_area"] = p["dash_min_area"] + 1
-    # ints
-    for k in ("min_dashes_side", "min_dashes_front", "min_dashes_back",
-              "use_orientation", "debounce"):
-        p[k] = int(p[k])
-    # floats stay floats; the rest cast to match _DEFAULT_PARAMS types
+    if p["min_fill_ratio"] >= p["max_fill_ratio"]:
+        p["max_fill_ratio"] = min(1.0, p["min_fill_ratio"] + 0.05)
+    if p["seg_min_area"] >= p["seg_max_area"]:
+        p["seg_max_area"] = p["seg_min_area"] + 1
+    # match types to defaults
     for k, dv in _DEFAULT_PARAMS.items():
-        if isinstance(dv, float):
-            p[k] = float(p[k])
+        p[k] = float(p[k]) if isinstance(dv, float) else int(p[k])
     return p
 
 
-def _resolve_default_yaml() -> Path:
+def _resolve_default_yaml():
     try:
         from ament_index_python.packages import get_package_share_directory
         share = get_package_share_directory("puzzlebot_challenge")
@@ -153,15 +143,14 @@ def _resolve_default_yaml() -> Path:
         return here.parent / "config" / "intersection_params.yaml"
 
 
-def save_params(p: dict, out_path: Path):
+def save_params(p, out_path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {k: p[k] for k in _DEFAULT_PARAMS}  # only node-consumed keys
+    payload = {k: p[k] for k in _DEFAULT_PARAMS}
     with open(out_path, "w") as f:
         yaml.dump(payload, f, default_flow_style=False, sort_keys=False)
     print(f"[saved] {out_path.resolve()}")
 
 
-# ─── Live frame buffer (ROS2) ────────────────────────────────────────
 class _LiveFrameBuffer:
     def __init__(self):
         self._frame = None
@@ -176,7 +165,7 @@ class _LiveFrameBuffer:
             return self._frame
 
 
-def run_live(buf: _LiveFrameBuffer, topic: str, out_path: Path):
+def run_live(buf, topic, out_path):
     import rclpy
     from rclpy.node import Node
     from sensor_msgs.msg import Image
@@ -225,7 +214,7 @@ def open_source_file(arg):
     return (lambda: cap.read()[1]), False, cap
 
 
-def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool):
+def _ui_loop(source, pump_or_cap, out_path, is_image, is_live):
     cv.namedWindow(WIN_DEBUG, cv.WINDOW_NORMAL)
     cv.namedWindow(WIN_BIN,   cv.WINDOW_NORMAL)
     detector = IntersectionDetection()
@@ -262,8 +251,7 @@ def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool)
         p = read_params()
         detector.params.update(p)
         r = detector.detect(frame)
-        debug = draw_overlay(frame, r, p)
-        cv.imshow(WIN_DEBUG, debug)
+        cv.imshow(WIN_DEBUG, draw_overlay(frame, r, p))
         if r["binary"] is not None:
             cv.imshow(WIN_BIN, r["binary"])
 
@@ -282,13 +270,10 @@ def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool)
 def main():
     default_yaml = _resolve_default_yaml()
     ap = argparse.ArgumentParser(description="Intersection detector tuner (PuzzleBot)")
-    ap.add_argument("--live", action="store_true",
-                    help="Subscribe to ROS2 topic instead of file/webcam")
+    ap.add_argument("--live", action="store_true")
     ap.add_argument("--topic", default="/camera/image_raw")
-    ap.add_argument("--image", default=None,
-                    help="Path to image/video. Omit (and no --live) to use webcam.")
-    ap.add_argument("--out", default=str(default_yaml),
-                    help=f"Output YAML (default: {default_yaml})")
+    ap.add_argument("--image", default=None)
+    ap.add_argument("--out", default=str(default_yaml))
     args = ap.parse_args()
 
     out_path = Path(args.out)
