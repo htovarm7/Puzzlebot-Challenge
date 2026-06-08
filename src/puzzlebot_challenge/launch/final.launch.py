@@ -93,7 +93,7 @@ def generate_launch_description():
         DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
         # YOLO
         DeclareLaunchArgument('conf_threshold', default_value='0.70', description='Umbral confianza YOLO (0-1)'),
-        DeclareLaunchArgument('min_det_area',   default_value='6000', description='Área mínima bbox para detectar señal [px²]'),
+        DeclareLaunchArgument('min_det_area',   default_value='2000', description='Área mínima bbox para detectar señal [px²]'),
         DeclareLaunchArgument('imgsz',          default_value='320',  description='Tamaño imagen inferencia YOLO'),
         DeclareLaunchArgument('infer_rate_hz',  default_value='8.0',  description='Frecuencia máxima inferencia YOLO [Hz]'),
     ]
