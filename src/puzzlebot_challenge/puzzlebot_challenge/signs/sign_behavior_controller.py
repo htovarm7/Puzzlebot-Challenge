@@ -14,9 +14,9 @@ Comportamientos:
   give_way    → sigue la línea mientras ve la señal; al perderla, para 2 s y continúa
   stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
   workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
-  turn_left   → al DEJAR de ver la señal, girar a la izquierda en la intersección
-  turn_right  → al DEJAR de ver la señal, girar a la derecha en la intersección
-  go_straight → al DEJAR de ver la señal, avanzar recto siguiendo la línea
+  turn_left   → al llegar a la intersección (/intersection/stop), girar a la izquierda
+  turn_right  → al llegar a la intersección (/intersection/stop), girar a la derecha
+  go_straight → al llegar a la intersección (/intersection/stop), avanzar recto
 """
 
 import rclpy
@@ -81,11 +81,12 @@ class SignBehaviorController(Node):
         self.declare_parameter("sign_cooldown",  SIGN_COOLDOWN)
         self.declare_parameter("wait_for_start", True)
 
-        self.create_subscription(String,  "/sign/command",      self._cb_command,  10)
-        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected, 10)
-        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,    10)
-        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,    10)
-        self.create_subscription(Empty,   "/robot/start",       self._cb_start,    10)
+        self.create_subscription(String,  "/sign/command",      self._cb_command,      10)
+        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected,     10)
+        self.create_subscription(Bool,    "/intersection/stop", self._cb_intersection, 10)
+        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,        10)
+        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,        10)
+        self.create_subscription(Empty,   "/robot/start",       self._cb_start,        10)
 
         self._pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self._pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
@@ -95,6 +96,8 @@ class SignBehaviorController(Node):
         self._sign_command  = "none"
         self._sign_detected = False
         self._prev_detected = False
+        self._intersection      = False
+        self._prev_intersection = False
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
         self._last_trigger  = {}   # cmd → timestamp del último disparo
@@ -121,6 +124,9 @@ class SignBehaviorController(Node):
 
     def _cb_detected(self, msg: Bool):
         self._sign_detected = bool(msg.data)
+
+    def _cb_intersection(self, msg: Bool):
+        self._intersection = bool(msg.data)
 
     def _cb_vel_l(self, msg: Float32):
         self._line_vel_l = float(msg.data)
@@ -151,9 +157,9 @@ class SignBehaviorController(Node):
         S_STOP:             "STOP — detenido",
         S_STOP_HOLD:        "STOP — hold",
         S_WORKERS:          "WORKERS — velocidad reducida",
-        S_PENDING_LEFT:     "TURN LEFT detectado — esperando salir del frame",
-        S_PENDING_RIGHT:    "TURN RIGHT detectado — esperando salir del frame",
-        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — esperando salir del frame",
+        S_PENDING_LEFT:     "TURN LEFT detectado — esperando intersección",
+        S_PENDING_RIGHT:    "TURN RIGHT detectado — esperando intersección",
+        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — esperando intersección",
         S_APPROACH_LEFT:    "TURN LEFT — tramo recto previo",
         S_APPROACH_RIGHT:   "TURN RIGHT — tramo recto previo",
         S_TURNING_LEFT:     "TURN LEFT — girando",
@@ -189,6 +195,10 @@ class SignBehaviorController(Node):
         rising  = detected and not self._prev_detected   # señal aparece
         falling = not detected and self._prev_detected   # señal desaparece
         self._prev_detected = detected
+
+        intersection = self._intersection
+        inter_rising = intersection and not self._prev_intersection   # llega a la intersección
+        self._prev_intersection = intersection
 
         p = self.get_parameter
         gw_time  = p("give_way_stop_time").value
@@ -255,9 +265,9 @@ class SignBehaviorController(Node):
                 self._enter(S_IDLE)
                 self._passthrough()
 
-        # ── PENDING_*: espera a que la señal desaparezca ───────────────────
+        # ── PENDING_*: sigue la línea hasta llegar a la intersección ───────
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
-            if falling:
+            if inter_rising:
                 if self._state == S_PENDING_LEFT:
                     self._enter(S_APPROACH_LEFT)
                 elif self._state == S_PENDING_RIGHT:

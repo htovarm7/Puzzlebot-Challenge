@@ -94,30 +94,6 @@ def _warmup(model, imgsz: int = 320):
     os.close(_o1); os.close(_o2); os.close(_dn)
     print("[sign_detector] warmup done", flush=True)
 
-def _contour_arrow_direction(frame, x1, y1, x2, y2):
-    """Detecta direccion de flecha por proyeccion de columnas.
-    Suma pixeles blancos por columna, suaviza el perfil y busca el pico.
-    El pico indica donde esta la base del arrowhead (parte mas ancha).
-    Retorna: turn_left | turn_right | go_straight | None
-    """
-    crop = frame[max(0, y1):y2, max(0, x1):x2]
-    if crop.size == 0:
-        return None
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    white = cv2.inRange(hsv, (0, 0, 160), (180, 70, 255))
-    if int(white.sum() // 255) < 300:
-        return None
-    profile = white.sum(axis=0).astype(np.float32)
-    profile = cv2.GaussianBlur(profile.reshape(1, -1), (9, 1), 0).flatten()
-    peak_x  = int(np.argmax(profile))
-    w       = crop.shape[1]
-    ratio   = peak_x / w
-    if ratio < 0.40:
-        return "turn_left"
-    if ratio > 0.60:
-        return "turn_right"
-    return "go_straight"
-
 def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
@@ -128,10 +104,6 @@ def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 3
     for box in results.boxes:
         label = model.names[int(box.cls)].lower().replace("-", "_").replace(" ", "_")
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        if label in ("turn_left", "turn_right", "go_straight"):
-            contour_dir = _contour_arrow_direction(frame, x1, y1, x2, y2)
-            if contour_dir is not None:
-                label = contour_dir
         dets.append((label, x1, y1, x2 - x1, y2 - y1, round(float(box.conf), 2)))
     return dets
 

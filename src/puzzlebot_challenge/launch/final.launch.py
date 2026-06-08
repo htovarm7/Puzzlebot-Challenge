@@ -69,6 +69,7 @@ def generate_launch_description():
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
     hsv_cfg    = os.path.join(pkg_share, 'config', 'traffic_hsv.yaml')
+    inter_cfg  = os.path.join(pkg_share, 'config', 'intersection_params.yaml')
 
     # ── Argumentos ──────────────────────────────────────────────────────────────
     args = [
@@ -119,6 +120,14 @@ def generate_launch_description():
         executable='traffic_detector',
         name='traffic_light_detector',
         parameters=[{'hsv_config': hsv_cfg}],
+        output='screen',
+    )
+
+    intersection_detector = Node(
+        package='puzzlebot_challenge',
+        executable='intersection_detector',
+        name='intersection_detector',
+        parameters=[{'params_config': inter_cfg}],
         output='screen',
     )
 
@@ -191,6 +200,7 @@ def generate_launch_description():
         picam,
         line_detector,
         traffic_detector,
+        intersection_detector,
         sign_detector,
         line_follower,
         sign_behavior,
