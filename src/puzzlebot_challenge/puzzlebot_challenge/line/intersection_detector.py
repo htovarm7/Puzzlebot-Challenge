@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
 """
-intersection_detector.py  (v4 — IPM warp + 3-ROI dash counting)
+intersection_detector.py  (v5 — near-band STOP trigger)
 
-Simple, robust intersection arm detection, separate from line following.
+Minimal intersection detector: raises a STOP signal when a dashed crossing
+line is right at the wheels. No direction logic — after stopping, the sign
+reader decides what to do (handled elsewhere).
 
 Pipeline
 --------
 1. IPM warp        : perspective transform from 4 floor points -> bird's-eye.
-                     Tune the 4 points with the calibrator's Source window.
-                     (Toggle with ipm_enable; ROI-crop fallback when off.)
-2. Threshold+morph : adaptive threshold + opening/closing to clean speckle.
+                     (Toggle ipm_enable; ROI-crop fallback when off.)
+2. Threshold+morph : adaptive threshold + opening/closing.
 3. Dash blobs      : contours filtered by area + aspect ratio.
-4. 3 ROIs          : split by left_edge / right_edge into LEFT | CENTER | RIGHT.
-5. Count + decide  : dashes in a ROI >= min_dashes_per_roi  ->  that arm is open
-                       LEFT ROI   -> LEFT
-                       CENTER ROI -> FRONT
-                       RIGHT ROI  -> RIGHT
-6. Debounce        : confirm over several frames (in the node).
+4. NEAR BAND       : count only dashes in the bottom `near_band` fraction of
+                     the warp — i.e. on the ground right in front of the robot.
+5. STOP            : count >= min_dashes  ->  stop = True.
+6. Debounce        : confirm over a couple of frames (in the node).
 
-Topics (unchanged)
-------------------
+Because the view is top-down, "at the wheels" is simply "in the bottom strip"
+— a fixed real distance, not a perspective guess.
+
+Topics
+------
 Sub : /camera/image_raw       (sensor_msgs/Image)
-Pub : /intersection/detected  (std_msgs/Bool)
-      /intersection/arms       (std_msgs/String)   "front,left,right" | "none"
-      /vision/intersection     (sensor_msgs/Image)  warped annotated view
+Pub : /intersection/stop      (std_msgs/Bool)   <- main trigger
+      /intersection/detected  (std_msgs/Bool)   <- same value (compat alias)
+      /vision/intersection     (sensor_msgs/Image)
 """
 
 from __future__ import annotations
@@ -38,44 +40,38 @@ import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import ParameterDescriptor
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 
 
-ARM_ORDER = ("front", "left", "right")
-ROI_TO_ARM = {"center": "front", "left": "left", "right": "right"}
-
 _DEFAULT_PARAMS = {
     # ── Inverse Perspective Mapping (bird's-eye) ───────────────────────
-    "ipm_enable":         1,
-    "src_top_x":          0.30,
-    "src_top_y":          0.62,
-    "src_bot_x":          0.02,
-    "src_bot_y":          0.98,
-    "warp_w":             360,
-    "warp_h":             480,
+    "ipm_enable":     1,
+    "src_top_x":      0.30,
+    "src_top_y":      0.62,
+    "src_bot_x":      0.02,
+    "src_bot_y":      0.98,
+    "warp_w":         360,
+    "warp_h":         480,
 
     # ── Fallback ROI (used only when ipm_enable = 0) ───────────────────
-    "roi_top":            0.45,
+    "roi_top":        0.45,
 
     # ── Threshold + morphology ─────────────────────────────────────────
-    "blur":               5,
-    "adapt_block":        41,
-    "adapt_c":            10,
-    "morph":              3,
+    "blur":           5,
+    "adapt_block":    41,
+    "adapt_c":        10,
+    "morph":          3,
 
     # ── Dash-shaped blob filter ────────────────────────────────────────
-    "seg_min_area":       40.0,
-    "seg_max_area":       6000.0,
-    "seg_min_aspect":     1.5,
+    "seg_min_area":   40.0,
+    "seg_max_area":   6000.0,
+    "seg_min_aspect": 1.5,
 
-    # ── 3-ROI split (fractions of the work-image width) ────────────────
-    "left_edge":          0.33,    # x < left_edge*W  -> LEFT ROI
-    "right_edge":         0.66,    # x > right_edge*W -> RIGHT ROI ; else CENTER
-
-    # ── Decision / stabilisation ───────────────────────────────────────
-    "min_dashes_per_roi": 2,       # dashes in a ROI to call that arm open
-    "debounce":           3,
+    # ── Near band + trigger ────────────────────────────────────────────
+    "near_band":      0.18,   # bottom fraction of the warp = "at the wheels"
+    "min_dashes":     3,      # dashes in the band needed to STOP
+    "debounce":       2,      # consecutive frames to confirm
 }
 
 
@@ -157,12 +153,11 @@ class IntersectionDetection:
     def detect(self, frame_bgr: np.ndarray) -> dict:
         p = self.params
         out: dict = {
-            "detected": False,
-            "arms":     {a: False for a in ARM_ORDER},
-            "counts":   {a: 0 for a in ARM_ORDER},   # keyed by arm
+            "stop": False, "count": 0,
             "segments": [],
             "canvas": None, "binary": None,
             "oy": 0, "pw": 0, "ph": 0,
+            "band_top": 0,                 # work-image y where the near band starts
             "ipm": bool(int(p["ipm_enable"])),
         }
         if frame_bgr is None or frame_bgr.size == 0:
@@ -186,68 +181,67 @@ class IntersectionDetection:
             binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         out["binary"] = binary
 
-        lx = float(p["left_edge"]) * Pw
-        rx = float(p["right_edge"]) * Pw
+        band = float(np.clip(p["near_band"], 0.02, 0.99))
+        band_top = (1.0 - band) * Ph
+        out["band_top"] = int(band_top)
+
         a_min = float(p["seg_min_area"])
         a_max = float(p["seg_max_area"])
         asp   = float(p["seg_min_aspect"])
 
-        counts = {"left": 0, "center": 0, "right": 0}
+        count = 0
         contours, _ = cv2.findContours(
             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for c in contours:
             area = cv2.contourArea(c)
             rect = cv2.minAreaRect(c)
             box = cv2.boxPoints(rect)
-            (cx, _cy), _, _ = rect
+            (_cx, cy), _, _ = rect
             is_dash = (a_min <= area <= a_max) and (self._aspect(box) >= asp)
-            roi = "left" if cx < lx else ("right" if cx > rx else "center")
-            if is_dash:
-                counts[roi] += 1
+            in_band = cy >= band_top
+            if is_dash and in_band:
+                count += 1
             out["segments"].append({
                 "box": (box + np.array([0, oy])).astype(int),
-                "dash": is_dash, "roi": roi,
+                "dash": is_dash, "near": in_band,
             })
 
-        thr = int(p["min_dashes_per_roi"])
-        for roi, arm in ROI_TO_ARM.items():
-            out["counts"][arm] = counts[roi]
-            out["arms"][arm] = counts[roi] >= thr
-        out["detected"] = any(out["arms"].values())
+        out["count"] = count
+        out["stop"] = count >= int(p["min_dashes"])
         return out
-
-
-def arms_to_str(arms: dict) -> str:
-    present = [a for a in ARM_ORDER if arms.get(a)]
-    return ",".join(present) if present else "none"
 
 
 def draw_overlay(frame: np.ndarray, r: dict, params: dict) -> np.ndarray:
     canvas = r.get("canvas")
     vis = (canvas if canvas is not None else frame).copy()
     oy, Pw, Ph = r["oy"], r["pw"], r["ph"]
+    band_top_c = oy + r["band_top"]
 
-    lx = int(float(params["left_edge"]) * Pw)
-    rx = int(float(params["right_edge"]) * Pw)
-    cv2.line(vis, (0, oy), (vis.shape[1], oy), (255, 200, 0), 1)
-    cv2.line(vis, (lx, oy), (lx, oy + Ph), (200, 200, 0), 2)
-    cv2.line(vis, (rx, oy), (rx, oy + Ph), (200, 200, 0), 2)
+    # shade the near band (the "at the wheels" zone)
+    overlay = vis.copy()
+    cv2.rectangle(overlay, (0, band_top_c), (vis.shape[1], oy + Ph),
+                  (0, 0, 160), -1)
+    vis = cv2.addWeighted(overlay, 0.25, vis, 0.75, 0)
+    cv2.line(vis, (0, band_top_c), (vis.shape[1], band_top_c), (0, 140, 255), 2)
 
-    # dashes counted = green ; ignored blobs = gray
+    # blobs: green = counted dash in band ; yellow = dash above band ; gray = other
     for s in r["segments"]:
-        color = (0, 255, 0) if s["dash"] else (110, 110, 110)
+        if s["dash"] and s["near"]:
+            color = (0, 255, 0)
+        elif s["dash"]:
+            color = (0, 220, 220)
+        else:
+            color = (110, 110, 110)
         cv2.drawContours(vis, [s["box"]], 0, color, 2)
 
-    cnt = r["counts"]
-    tag = arms_to_str(r["arms"]).upper()
     mode = "IPM" if r.get("ipm") else "ROI"
-    hud = (f"[{mode}] ARMS: {tag}   "
-           f"L{cnt['left']} F{cnt['front']} R{cnt['right']}   "
-           f"thr={int(params['min_dashes_per_roi'])}")
-    color = (0, 255, 0) if r["detected"] else (0, 165, 255)
+    state = "STOP" if r["stop"] else "clear"
+    color = (0, 0, 255) if r["stop"] else (0, 200, 0)
+    hud = (f"[{mode}] {state}   near={r['count']}  "
+           f"thr={int(params['min_dashes'])}")
     cv2.rectangle(vis, (0, 0), (vis.shape[1], 26), (40, 40, 40), -1)
     cv2.putText(vis, hud, (8, 19),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
     return vis
 
 
@@ -285,21 +279,22 @@ class IntersectionDetectorNode(Node):
         self.bridge   = CvBridge()
         self.detector = IntersectionDetection(self._snapshot_params())
 
-        self._pending = "none"
+        self._pending = False
         self._pending_n = 0
-        self._confirmed = "none"
+        self._confirmed = False
 
         image_topic = self.get_parameter("image_topic").value
         self.sub_img      = self.create_subscription(
             Image, image_topic, self._on_image, 10)
-        self.pub_detected = self.create_publisher(Bool,   "/intersection/detected", 10)
-        self.pub_arms     = self.create_publisher(String, "/intersection/arms",     10)
-        self.pub_debug    = self.create_publisher(Image,  "/vision/intersection",   10)
+        self.pub_stop     = self.create_publisher(Bool, "/intersection/stop",     10)
+        self.pub_detected = self.create_publisher(Bool, "/intersection/detected", 10)
+        self.pub_debug    = self.create_publisher(Image, "/vision/intersection",  10)
 
         self.get_logger().info(
-            f"IntersectionDetectorNode (v4 3-ROI count) ready | topic={image_topic} | "
+            f"IntersectionDetectorNode (v5 STOP) ready | topic={image_topic} | "
             f"ipm={'on' if int(self.detector.params['ipm_enable']) else 'off'} | "
-            f"min_dashes_per_roi={int(self.detector.params['min_dashes_per_roi'])}")
+            f"near_band={self.detector.params['near_band']:.2f} | "
+            f"min_dashes={int(self.detector.params['min_dashes'])}")
 
     def _snapshot_params(self) -> dict:
         return {k: self.get_parameter(k).value for k in _DEFAULT_PARAMS}
@@ -313,7 +308,7 @@ class IntersectionDetectorNode(Node):
             return
 
         r = self.detector.detect(frame)
-        raw = arms_to_str(r["arms"])
+        raw = bool(r["stop"])
 
         n_need = int(self.detector.params["debounce"])
         if raw == self._pending:
@@ -323,12 +318,12 @@ class IntersectionDetectorNode(Node):
             self._pending_n = 1
         if self._pending_n >= n_need and self._pending != self._confirmed:
             self._confirmed = self._pending
-            self.get_logger().info(f"INTERSECTION: {self._confirmed.upper()}")
+            self.get_logger().info(
+                f"STOP LINE {'DETECTED' if self._confirmed else 'cleared'}")
 
-        d_msg = Bool();   d_msg.data = (self._confirmed != "none")
-        a_msg = String(); a_msg.data = self._confirmed
-        self.pub_detected.publish(d_msg)
-        self.pub_arms.publish(a_msg)
+        msg_out = Bool(); msg_out.data = self._confirmed
+        self.pub_stop.publish(msg_out)
+        self.pub_detected.publish(msg_out)
 
         if self.pub_debug.get_subscription_count() > 0 and r["canvas"] is not None:
             vis = draw_overlay(frame, r, self.detector.params)

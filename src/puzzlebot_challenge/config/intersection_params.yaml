@@ -13,7 +13,6 @@ morph: 3
 seg_min_area: 40.0
 seg_max_area: 6000.0
 seg_min_aspect: 1.5
-left_edge: 0.33
-right_edge: 0.66
-min_dashes_per_roi: 2
-debounce: 3
+near_band: 0.18
+min_dashes: 3
+debounce: 2
