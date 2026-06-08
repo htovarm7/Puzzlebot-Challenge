@@ -244,6 +244,10 @@ class SignDetectorNode(Node):
         min_dt    = 1.0 / max(self._infer_rate_hz, 0.5)
         last_time = 0.0
 
+        # --- DIAGNÓSTICO TEMPORAL: Hz real + detecciones crudas (sin filtrar) ---
+        diag_count   = 0
+        diag_t0      = time.monotonic()
+
         while rclpy.ok():
             self._infer_event.wait()
             self._infer_event.clear()
@@ -267,6 +271,23 @@ class SignDetectorNode(Node):
             except Exception as e:
                 self.get_logger().error(f"YOLO falló: {e}")
                 continue
+
+            # --- DIAGNÓSTICO TEMPORAL ---
+            diag_count += 1
+            diag_elapsed = time.monotonic() - diag_t0
+            if diag_elapsed >= 2.0:
+                hz = diag_count / diag_elapsed
+                if dets:
+                    raw_str = ", ".join(
+                        f"{lbl} conf={c:.2f} bbox={w}x{h} area={w*h}px"
+                        for lbl, _, _, w, h, c in dets)
+                else:
+                    raw_str = "sin detecciones crudas"
+                self.get_logger().info(
+                    f"[DIAG] infer_hz={hz:.2f}  frames={diag_count}  {raw_str}")
+                diag_count = 0
+                diag_t0 = time.monotonic()
+            # --- FIN DIAGNÓSTICO ---
 
             dets = [d for d in dets if d[3] * d[4] >= self._min_area]
             raw_cmd = dets[0][0] if dets else "none"

@@ -98,7 +98,6 @@ def generate_launch_description():
         DeclareLaunchArgument('infer_rate_hz',  default_value='8.0',  description='Frecuencia máxima inferencia YOLO [Hz]'),
     ]
 
-    # ── 1. Cámara CSI ────────────────────────────────────────────────────────────
     picam = Node(
         package='puzzlebot_challenge',
         executable='picam_publisher',
@@ -107,7 +106,6 @@ def generate_launch_description():
         output='log',
     )
 
-    # ── 2. Detector de línea ─────────────────────────────────────────────────────
     line_detector = Node(
         package='puzzlebot_challenge',
         executable='line_detector',
@@ -116,7 +114,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Detector de semáforo HSV (prioridad máxima) ───────────────────────────
     traffic_detector = Node(
         package='puzzlebot_challenge',
         executable='traffic_detector',
@@ -125,7 +122,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 4. Detector de señales YOLO ──────────────────────────────────────────────
     sign_detector = Node(
         package='puzzlebot_challenge',
         executable='sign_detector',
@@ -140,7 +136,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 5. Seguidor de línea (salida remapeada, sign_behavior_controller toma prioridad)
     line_follower = Node(
         package='puzzlebot_challenge',
         executable='line_follower',
@@ -160,7 +155,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 6. Controlador de comportamiento por señales (salida final) ──────────────
     sign_behavior = Node(
         package='puzzlebot_challenge',
         executable='sign_behavior_controller',
@@ -181,7 +175,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Precarga libgomp para evitar error TLS en Jetson + ROS2
     libgomp = _find_libgomp()
     env_actions = [
         SetEnvironmentVariable('PYTHONUNBUFFERED', '1'),
