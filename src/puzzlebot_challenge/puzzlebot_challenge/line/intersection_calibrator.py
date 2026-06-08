@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-intersection_calibrator.py  (v3 — IPM + dash grouping)
+intersection_calibrator.py  (v4 — IPM warp + 3-ROI dash counting)
 
 Interactive tuner. Reuses the EXACT detection core from
 `intersection_detector`, so the tuner matches the runtime node.
 
 Windows
 -------
-  Source        raw frame with the IPM source quad (tune the 4 floor points)
-  Debug         the WORK image (warped, if IPM on) with detections
-  Binary        the thresholded work image
+  Source    raw frame with the IPM source quad (tune the 4 floor points)
+  Debug     the work view (warped) with the 3 ROIs and dash counts
+  Binary    the thresholded work image
 
 Tuning order
 ------------
-  1. Turn ipm_enable = 1. Adjust src_top_x/y and src_bot_x/y until the
-     floor / lane region fills the Debug window as a clean top-down view
-     (lane lines become vertical, an intersection becomes a square).
-  2. Tune adapt_block / adapt_c / morph until dashes are crisp in Binary.
-  3. Tune seg_* so each dash is one accepted blob.
-  4. Tune grouping + fill/resid until the dashed line(s) go green and
-     solids/curves go red. Watch the f0.xx label on each green line.
+  1. ipm_enable = 1. Adjust src_top_x/y, src_bot_x/y until the Debug view
+     is a clean top-down (lane lines vertical / parallel).
+  2. adapt_block / adapt_c / morph until dashes are crisp in Binary.
+  3. seg_min_area / seg_max_area / seg_min_aspect until each dash is one
+     green blob and big solid lines / noise stay gray.
+  4. left_edge / right_edge to place the 3 ROI boundaries.
+  5. min_dashes_per_roi: how many dashes in a ROI count as "open".
 
 Keys : q quit   s save   r reset   space pause (file/webcam only)
 
@@ -76,18 +76,9 @@ _TRACKBARS = [
     ("seg_min_area",       4000,  1.0,   "seg_min_area"),
     ("seg_max_area",       30000, 1.0,   "seg_max_area"),
     ("seg_min_asp x10",    200,   10.0,  "seg_min_aspect"),
-    ("group_angle_tol",    90,    1.0,   "group_angle_tol"),
-    ("group_perp_tol",     150,   1.0,   "group_perp_tol"),
-    ("min_dashes_in_line", 15,    1.0,   "min_dashes_in_line"),
-    ("min_fill %",         100,   100.0, "min_fill_ratio"),
-    ("max_fill %",         100,   100.0, "max_fill_ratio"),
-    ("max_resid px",       80,    1.0,   "max_resid_px"),
     ("left_edge %",        99,    100.0, "left_edge"),
     ("right_edge %",       99,    100.0, "right_edge"),
-    ("front_edge %",       99,    100.0, "front_edge"),
-    ("back_edge %",        99,    100.0, "back_edge"),
-    ("horiz/vert split",   90,    1.0,   "horiz_vert_split"),
-    ("min_lines_per_arm",  5,     1.0,   "min_lines_per_arm"),
+    ("min_dashes_per_roi", 15,    1.0,   "min_dashes_per_roi"),
     ("debounce",           10,    1.0,   "debounce"),
 ]
 
@@ -113,7 +104,7 @@ def _load_saved(yaml_path):
 def build_window(yaml_path=None):
     saved = _load_saved(yaml_path)
     cv.namedWindow(WIN_CTRL, cv.WINDOW_NORMAL)
-    cv.resizeWindow(WIN_CTRL, 480, 900)
+    cv.resizeWindow(WIN_CTRL, 480, 680)
     for name, vmax, scale, key in _TRACKBARS:
         init = min(_to_trackbar(key, scale, saved), vmax)
         cv.createTrackbar(name, WIN_CTRL, max(0, init), vmax, nothing)
@@ -130,7 +121,6 @@ def read_params():
     for name, vmax, scale, key in _TRACKBARS:
         raw = cv.getTrackbarPos(name, WIN_CTRL)
         p[key] = raw / scale if scale != 1.0 else raw
-    # sanitise
     p["blur"]        = max(1, int(p["blur"]) | 1)
     p["adapt_block"] = max(3, int(p["adapt_block"]) | 1)
     p["morph"]       = max(1, int(p["morph"]))
@@ -140,10 +130,6 @@ def read_params():
         p["src_bot_y"] = min(0.999, p["src_top_y"] + 0.01)
     if p["left_edge"] >= p["right_edge"]:
         p["right_edge"] = min(0.99, p["left_edge"] + 0.01)
-    if p["front_edge"] >= p["back_edge"]:
-        p["back_edge"] = min(0.99, p["front_edge"] + 0.01)
-    if p["min_fill_ratio"] >= p["max_fill_ratio"]:
-        p["max_fill_ratio"] = min(1.0, p["min_fill_ratio"] + 0.05)
     if p["seg_min_area"] >= p["seg_max_area"]:
         p["seg_max_area"] = p["seg_min_area"] + 1
     for k, dv in _DEFAULT_PARAMS.items():
