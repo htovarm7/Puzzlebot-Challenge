@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-intersection_calibrator.py  (v4 — IPM warp + 3-ROI dash counting)
+intersection_calibrator.py  (v5 — near-band STOP trigger)
 
 Interactive tuner. Reuses the EXACT detection core from
 `intersection_detector`, so the tuner matches the runtime node.
@@ -8,18 +8,19 @@ Interactive tuner. Reuses the EXACT detection core from
 Windows
 -------
   Source    raw frame with the IPM source quad (tune the 4 floor points)
-  Debug     the work view (warped) with the 3 ROIs and dash counts
+  Debug     work view (warped) with the shaded near band + dash count
   Binary    the thresholded work image
 
 Tuning order
 ------------
-  1. ipm_enable = 1. Adjust src_top_x/y, src_bot_x/y until the Debug view
-     is a clean top-down (lane lines vertical / parallel).
+  1. ipm_enable = 1. Adjust src_top_x/y, src_bot_x/y for a clean top-down.
   2. adapt_block / adapt_c / morph until dashes are crisp in Binary.
-  3. seg_min_area / seg_max_area / seg_min_aspect until each dash is one
-     green blob and big solid lines / noise stay gray.
-  4. left_edge / right_edge to place the 3 ROI boundaries.
-  5. min_dashes_per_roi: how many dashes in a ROI count as "open".
+  3. seg_min_area / seg_max_area / seg_min_aspect so each dash is one green
+     blob and solid lines / noise stay gray.
+  4. near_band: height of the red band at the bottom = "at the wheels".
+     Make it just thick enough that the crossing row lands inside it right
+     as it reaches the robot.
+  5. min_dashes: how many dashes in the band trigger STOP (HUD turns red).
 
 Keys : q quit   s save   r reset   space pause (file/webcam only)
 
@@ -76,9 +77,8 @@ _TRACKBARS = [
     ("seg_min_area",       4000,  1.0,   "seg_min_area"),
     ("seg_max_area",       30000, 1.0,   "seg_max_area"),
     ("seg_min_asp x10",    200,   10.0,  "seg_min_aspect"),
-    ("left_edge %",        99,    100.0, "left_edge"),
-    ("right_edge %",       99,    100.0, "right_edge"),
-    ("min_dashes_per_roi", 15,    1.0,   "min_dashes_per_roi"),
+    ("near_band %",        60,    100.0, "near_band"),
+    ("min_dashes",         15,    1.0,   "min_dashes"),
     ("debounce",           10,    1.0,   "debounce"),
 ]
 
@@ -104,7 +104,7 @@ def _load_saved(yaml_path):
 def build_window(yaml_path=None):
     saved = _load_saved(yaml_path)
     cv.namedWindow(WIN_CTRL, cv.WINDOW_NORMAL)
-    cv.resizeWindow(WIN_CTRL, 480, 680)
+    cv.resizeWindow(WIN_CTRL, 480, 660)
     for name, vmax, scale, key in _TRACKBARS:
         init = min(_to_trackbar(key, scale, saved), vmax)
         cv.createTrackbar(name, WIN_CTRL, max(0, init), vmax, nothing)
@@ -128,13 +128,15 @@ def read_params():
     p["warp_h"]      = max(60, int(p["warp_h"]))
     if p["src_top_y"] >= p["src_bot_y"]:
         p["src_bot_y"] = min(0.999, p["src_top_y"] + 0.01)
-    if p["left_edge"] >= p["right_edge"]:
-        p["right_edge"] = min(0.99, p["left_edge"] + 0.01)
     if p["seg_min_area"] >= p["seg_max_area"]:
         p["seg_max_area"] = p["seg_min_area"] + 1
+    p["near_band"] = float(np.clip(p["near_band"], 0.02, 0.99))
+    # cast to default types; fall back to defaults if a key is somehow missing
+    out = {}
     for k, dv in _DEFAULT_PARAMS.items():
-        p[k] = float(p[k]) if isinstance(dv, float) else int(p[k])
-    return p
+        v = p.get(k, dv)
+        out[k] = float(v) if isinstance(dv, float) else int(v)
+    return out
 
 
 def _resolve_default_yaml():
@@ -274,7 +276,7 @@ def _ui_loop(source, pump_or_cap, out_path, is_image, is_live):
 
 def main():
     default_yaml = _resolve_default_yaml()
-    ap = argparse.ArgumentParser(description="Intersection detector tuner (PuzzleBot)")
+    ap = argparse.ArgumentParser(description="Intersection STOP tuner (PuzzleBot)")
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--topic", default="/camera/image_raw")
     ap.add_argument("--image", default=None)
