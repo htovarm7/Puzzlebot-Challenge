@@ -13,16 +13,7 @@ morph: 3
 seg_min_area: 40.0
 seg_max_area: 6000.0
 seg_min_aspect: 1.5
-group_angle_tol: 18.0
-group_perp_tol: 22.0
-min_dashes_in_line: 4
-min_fill_ratio: 0.12
-max_fill_ratio: 0.88
-max_resid_px: 18.0
 left_edge: 0.33
 right_edge: 0.66
-front_edge: 0.45
-back_edge: 0.85
-horiz_vert_split: 45.0
-min_lines_per_arm: 1
+min_dashes_per_roi: 2
 debounce: 3

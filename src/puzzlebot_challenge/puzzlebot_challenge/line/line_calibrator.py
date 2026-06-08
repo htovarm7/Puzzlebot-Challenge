@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """
-intersection_calibrator.py  (v2 — dash grouping)
+intersection_calibrator.py  (v4 — IPM warp + 3-ROI dash counting)
 
-Interactive tuner for the dashed-intersection detector. Reuses the EXACT
-detection core from `intersection_detector`, so the tuner preview matches
-the runtime node.
+Interactive tuner. Reuses the EXACT detection core from
+`intersection_detector`, so the tuner matches the runtime node.
 
-Modes
------
-  --live              Subscribe to /camera/image_raw (ROS2)        ← preferred
-  --image PATH        Static image or video file
-  (no flag)           Open default webcam
+Windows
+-------
+  Source    raw frame with the IPM source quad (tune the 4 floor points)
+  Debug     the work view (warped) with the 3 ROIs and dash counts
+  Binary    the thresholded work image
 
-Keys
-----
-  q quit   s save   r reset   space pause (file/webcam only)
+Tuning order
+------------
+  1. ipm_enable = 1. Adjust src_top_x/y, src_bot_x/y until the Debug view
+     is a clean top-down (lane lines vertical / parallel).
+  2. adapt_block / adapt_c / morph until dashes are crisp in Binary.
+  3. seg_min_area / seg_max_area / seg_min_aspect until each dash is one
+     green blob and big solid lines / noise stay gray.
+  4. left_edge / right_edge to place the 3 ROI boundaries.
+  5. min_dashes_per_roi: how many dashes in a ROI count as "open".
+
+Keys : q quit   s save   r reset   space pause (file/webcam only)
 
 Usage
 -----
@@ -33,18 +40,19 @@ import yaml
 
 try:
     from puzzlebot_challenge.line.intersection_detector import (
-        IntersectionDetection, draw_overlay, _DEFAULT_PARAMS,
+        IntersectionDetection, draw_overlay, draw_src_quad, _DEFAULT_PARAMS,
     )
 except Exception:
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from intersection_detector import (  # type: ignore
-        IntersectionDetection, draw_overlay, _DEFAULT_PARAMS,
+        IntersectionDetection, draw_overlay, draw_src_quad, _DEFAULT_PARAMS,
     )
 
 WIN_CTRL  = "Intersection — Controls"
-WIN_DEBUG = "Intersection — Debug"
-WIN_BIN   = "Intersection — Binary (ROI)"
+WIN_SRC   = "Intersection — Source quad (raw)"
+WIN_DEBUG = "Intersection — Debug (work view)"
+WIN_BIN   = "Intersection — Binary"
 
 
 def nothing(_):
@@ -53,32 +61,30 @@ def nothing(_):
 
 # (label, trackbar_max, scale, param_key)   value = trackbar / scale
 _TRACKBARS = [
-    ("roi_top %",          99,    100.0, "roi_top"),
+    ("ipm_enable",         1,     1.0,   "ipm_enable"),
+    ("src_top_x %",        49,    100.0, "src_top_x"),
+    ("src_top_y %",        99,    100.0, "src_top_y"),
+    ("src_bot_x %",        49,    100.0, "src_bot_x"),
+    ("src_bot_y %",        99,    100.0, "src_bot_y"),
+    ("warp_w",             720,   1.0,   "warp_w"),
+    ("warp_h",             720,   1.0,   "warp_h"),
+    ("roi_top % (no ipm)", 99,    100.0, "roi_top"),
     ("blur (odd)",         31,    1.0,   "blur"),
     ("adapt_block(odd)",   151,   1.0,   "adapt_block"),
     ("adapt_c",            40,    1.0,   "adapt_c"),
     ("morph",              15,    1.0,   "morph"),
-    ("seg_min_area",       2000,  1.0,   "seg_min_area"),
-    ("seg_max_area",       20000, 1.0,   "seg_max_area"),
+    ("seg_min_area",       4000,  1.0,   "seg_min_area"),
+    ("seg_max_area",       30000, 1.0,   "seg_max_area"),
     ("seg_min_asp x10",    200,   10.0,  "seg_min_aspect"),
-    ("group_angle_tol",    90,    1.0,   "group_angle_tol"),
-    ("group_perp_tol",     120,   1.0,   "group_perp_tol"),
-    ("min_dashes_in_line", 15,    1.0,   "min_dashes_in_line"),
-    ("min_fill %",         100,   100.0, "min_fill_ratio"),
-    ("max_fill %",         100,   100.0, "max_fill_ratio"),
-    ("max_resid px",       60,    1.0,   "max_resid_px"),
     ("left_edge %",        99,    100.0, "left_edge"),
     ("right_edge %",       99,    100.0, "right_edge"),
-    ("front_edge %",       99,    100.0, "front_edge"),
-    ("back_edge %",        99,    100.0, "back_edge"),
-    ("horiz/vert split",   90,    1.0,   "horiz_vert_split"),
-    ("min_lines_per_arm",  5,     1.0,   "min_lines_per_arm"),
+    ("min_dashes_per_roi", 15,    1.0,   "min_dashes_per_roi"),
     ("debounce",           10,    1.0,   "debounce"),
 ]
 
 
 def _to_trackbar(key, scale, saved):
-    val = saved.get(key, _DEFAULT_PARAMS[key])
+    val = saved.get(key, _DEFAULT_PARAMS.get(key, 0))
     return int(round(float(val) * scale))
 
 
@@ -98,7 +104,7 @@ def _load_saved(yaml_path):
 def build_window(yaml_path=None):
     saved = _load_saved(yaml_path)
     cv.namedWindow(WIN_CTRL, cv.WINDOW_NORMAL)
-    cv.resizeWindow(WIN_CTRL, 480, 760)
+    cv.resizeWindow(WIN_CTRL, 480, 680)
     for name, vmax, scale, key in _TRACKBARS:
         init = min(_to_trackbar(key, scale, saved), vmax)
         cv.createTrackbar(name, WIN_CTRL, max(0, init), vmax, nothing)
@@ -115,19 +121,17 @@ def read_params():
     for name, vmax, scale, key in _TRACKBARS:
         raw = cv.getTrackbarPos(name, WIN_CTRL)
         p[key] = raw / scale if scale != 1.0 else raw
-    # sanitise
     p["blur"]        = max(1, int(p["blur"]) | 1)
     p["adapt_block"] = max(3, int(p["adapt_block"]) | 1)
     p["morph"]       = max(1, int(p["morph"]))
+    p["warp_w"]      = max(60, int(p["warp_w"]))
+    p["warp_h"]      = max(60, int(p["warp_h"]))
+    if p["src_top_y"] >= p["src_bot_y"]:
+        p["src_bot_y"] = min(0.999, p["src_top_y"] + 0.01)
     if p["left_edge"] >= p["right_edge"]:
         p["right_edge"] = min(0.99, p["left_edge"] + 0.01)
-    if p["front_edge"] >= p["back_edge"]:
-        p["back_edge"] = min(0.99, p["front_edge"] + 0.01)
-    if p["min_fill_ratio"] >= p["max_fill_ratio"]:
-        p["max_fill_ratio"] = min(1.0, p["min_fill_ratio"] + 0.05)
     if p["seg_min_area"] >= p["seg_max_area"]:
         p["seg_max_area"] = p["seg_min_area"] + 1
-    # match types to defaults
     for k, dv in _DEFAULT_PARAMS.items():
         p[k] = float(p[k]) if isinstance(dv, float) else int(p[k])
     return p
@@ -215,8 +219,8 @@ def open_source_file(arg):
 
 
 def _ui_loop(source, pump_or_cap, out_path, is_image, is_live):
-    cv.namedWindow(WIN_DEBUG, cv.WINDOW_NORMAL)
-    cv.namedWindow(WIN_BIN,   cv.WINDOW_NORMAL)
+    for w in (WIN_SRC, WIN_DEBUG, WIN_BIN):
+        cv.namedWindow(w, cv.WINDOW_NORMAL)
     detector = IntersectionDetection()
 
     paused = False
@@ -251,6 +255,7 @@ def _ui_loop(source, pump_or_cap, out_path, is_image, is_live):
         p = read_params()
         detector.params.update(p)
         r = detector.detect(frame)
+        cv.imshow(WIN_SRC, draw_src_quad(frame, p))
         cv.imshow(WIN_DEBUG, draw_overlay(frame, r, p))
         if r["binary"] is not None:
             cv.imshow(WIN_BIN, r["binary"])
