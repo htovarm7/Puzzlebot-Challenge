@@ -5,14 +5,13 @@ sign_behavior_controller.py
 Intercepta las velocidades del line_follower y aplica comportamientos
 basados en las señales de tránsito detectadas por YOLO.
 
-** SIN DETECTOR DE INTERSECCIÓN **
-El giro ya NO depende de /intersection/stop. La lógica es:
-  cuando una señal de giro/recto está armada y el robot DEJA DE VER LA LÍNEA
-  (haya o no señal visible en ese instante), asumimos que llegó al cruce →
-  ejecuta la maniobra hardcodeada (izquierda / derecha / recto). La señal solo
-  sirve para ARMAR la maniobra; una vez armada, la pérdida de la línea es el
-  único disparador. La pérdida debe sostenerse arrive_grace s para evitar
-  disparos por parpadeos momentáneos; durante ese margen avanza recto.
+** SIN DETECTOR DE INTERSECCIÓN — DISPARO POR TEMPORIZADOR **
+El giro ya NO depende de /intersection/stop ni del estado de la línea. Lógica:
+  cuando se detecta una señal de giro/recto, el robot sigue la línea con
+  normalidad durante arm_delay segundos (por defecto 2 s) y luego ejecuta la
+  maniobra hardcodeada (izquierda / derecha / recto), IGNORANDO por completo
+  si ve o no la línea. Si la línea se pierde durante la cuenta, avanza recto
+  para no detenerse.
 
 Arquitectura de tópicos:
   line_follower  → /line/VelocitySetL, /line/VelocitySetR   (remapeado en launch)
@@ -24,9 +23,9 @@ Comportamientos:
   give_way    → sigue la línea mientras ve la señal; al perderla, para 2 s y continúa
   stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
   workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
-  turn_left   → al perder la línea (estando armado), gira a la izquierda
-  turn_right  → al perder la línea (estando armado), gira a la derecha
-  go_straight → al perder la línea (estando armado), avanza recto
+  turn_left   → arm_delay s tras detectar la señal, gira a la izquierda
+  turn_right  → arm_delay s tras detectar la señal, gira a la derecha
+  go_straight → arm_delay s tras detectar la señal, avanza recto
 """
 
 import rclpy
@@ -49,7 +48,7 @@ TURN_V             = 0.06  # m/s — velocidad lineal durante el giro
 STRAIGHT_TIME      = 3.0   # s — duración del override recto (go_straight)
 STRAIGHT_V         = 0.12  # m/s — velocidad durante el override recto
 SIGN_COOLDOWN      = 4.0   # s — cooldown antes de re-disparar el mismo comando
-ARRIVE_GRACE       = 0.5   # s — sin línea Y sin señal antes de concluir "estoy en el cruce"
+ARM_DELAY          = 2.0   # s — espera tras detectar la señal antes de ejecutar la maniobra
 CTRL_DT            = 0.05  # s — ciclo del bucle de control (20 Hz)
 
 # ── Identificadores de estado ─────────────────────────────────────────────────
@@ -90,7 +89,7 @@ class SignBehaviorController(Node):
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
         self.declare_parameter("sign_cooldown",      SIGN_COOLDOWN)
-        self.declare_parameter("arrive_grace",       ARRIVE_GRACE)
+        self.declare_parameter("arm_delay",          ARM_DELAY)
         self.declare_parameter("wait_for_start",     True)
 
         # /intersection/stop ya NO se usa — ahora escuchamos /line/detected
@@ -110,7 +109,6 @@ class SignBehaviorController(Node):
         self._sign_detected = False
         self._prev_detected = False
         self._line_detected = False
-        self._arrive_t      = None   # cuándo empezó la condición "sin línea y sin señal"
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
         self._last_trigger  = {}     # cmd → timestamp del último disparo
@@ -121,8 +119,8 @@ class SignBehaviorController(Node):
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
-            "SignBehaviorController listo — SIN intersección: el giro se dispara "
-            "al perder la línea Y la señal a la vez")
+            "SignBehaviorController listo — SIN intersección: la maniobra se dispara "
+            "arm_delay s después de detectar la señal (ignora el estado de la línea)")
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -172,9 +170,9 @@ class SignBehaviorController(Node):
         S_STOP:             "STOP — detenido",
         S_STOP_HOLD:        "STOP — hold",
         S_WORKERS:          "WORKERS — velocidad reducida",
-        S_PENDING_LEFT:     "TURN LEFT detectado — siguiendo línea hasta el cruce",
-        S_PENDING_RIGHT:    "TURN RIGHT detectado — siguiendo línea hasta el cruce",
-        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — siguiendo línea hasta el cruce",
+        S_PENDING_LEFT:     "TURN LEFT detectado — esperando arm_delay s antes de girar",
+        S_PENDING_RIGHT:    "TURN RIGHT detectado — esperando arm_delay s antes de girar",
+        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — esperando arm_delay s antes de recto",
         S_APPROACH_LEFT:    "TURN LEFT — tramo recto previo",
         S_APPROACH_RIGHT:   "TURN RIGHT — tramo recto previo",
         S_TURNING_LEFT:     "TURN LEFT — girando",
@@ -221,7 +219,7 @@ class SignBehaviorController(Node):
         t_v       = p("turn_v").value
         s_time    = p("straight_time").value
         s_v       = p("straight_v").value
-        arr_grace = p("arrive_grace").value
+        arm_delay = p("arm_delay").value
 
         # ── IDLE: espera nuevo comando ─────────────────────────────────────
         if self._state == S_IDLE:
@@ -277,32 +275,22 @@ class SignBehaviorController(Node):
                 self._enter(S_IDLE)
                 self._passthrough()
 
-        # ── PENDING_*: sigue la línea hasta el cruce. El cruce se concluye en
-        #    cuanto se PIERDE LA LÍNEA (con señal visible o no) sostenido
-        #    arrive_grace s. Durante ese margen avanza recto, nunca se para.
+        # ── PENDING_*: temporizador. Tras detectar la señal sigue la línea con
+        #    normalidad; cuando pasan arm_delay s ejecuta la maniobra, IGNORANDO
+        #    si ve o no la línea. Si la línea se pierde durante la cuenta, avanza
+        #    recto para no detenerse.
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
-            line_det = self._line_detected
-
-            if not line_det:
-                if self._arrive_t is None:
-                    self._arrive_t = self._now()
-                lost_for = self._now() - self._arrive_t
-            else:
-                self._arrive_t = None
-                lost_for = 0.0
-
-            if self._arrive_t is not None and lost_for >= arr_grace:
-                self._arrive_t = None
+            if elapsed >= arm_delay:
                 if self._state == S_PENDING_LEFT:
                     self._enter(S_APPROACH_LEFT)
                 elif self._state == S_PENDING_RIGHT:
                     self._enter(S_APPROACH_RIGHT)
                 else:
                     self._enter(S_GOING_STRAIGHT)
-            elif line_det:
-                self._passthrough()                       # sigue la línea mientras la veas
+            elif self._line_detected:
+                self._passthrough()                       # sigue la línea durante la cuenta
             else:
-                # línea perdida, dentro del margen: avanza recto, NO te pares
+                # línea perdida durante la cuenta: avanza recto, NO te pares
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, 0.0)
                 self._publish(vl, vr)
 
