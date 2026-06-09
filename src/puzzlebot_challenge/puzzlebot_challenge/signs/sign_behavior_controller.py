@@ -5,8 +5,18 @@ sign_behavior_controller.py
 Intercepta las velocidades del line_follower y aplica comportamientos
 basados en las señales de tránsito detectadas por YOLO.
 
+** SIN DETECTOR DE INTERSECCIÓN **
+El giro ya NO depende de /intersection/stop. La lógica es:
+  cuando una señal de giro/recto está armada y el robot DEJA DE VER LA LÍNEA
+  (haya o no señal visible en ese instante), asumimos que llegó al cruce →
+  ejecuta la maniobra hardcodeada (izquierda / derecha / recto). La señal solo
+  sirve para ARMAR la maniobra; una vez armada, la pérdida de la línea es el
+  único disparador. La pérdida debe sostenerse arrive_grace s para evitar
+  disparos por parpadeos momentáneos; durante ese margen avanza recto.
+
 Arquitectura de tópicos:
   line_follower  → /line/VelocitySetL, /line/VelocitySetR   (remapeado en launch)
+  line_detector  → /line/detected
   sign_detector  → /sign/command, /sign/detected
   este nodo      → /VelocitySetL, /VelocitySetR              (salida final)
 
@@ -14,9 +24,9 @@ Comportamientos:
   give_way    → sigue la línea mientras ve la señal; al perderla, para 2 s y continúa
   stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
   workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
-  turn_left   → al llegar a la intersección (/intersection/stop), girar a la izquierda
-  turn_right  → al llegar a la intersección (/intersection/stop), girar a la derecha
-  go_straight → al llegar a la intersección (/intersection/stop), avanzar recto
+  turn_left   → al perder la línea (estando armado), gira a la izquierda
+  turn_right  → al perder la línea (estando armado), gira a la derecha
+  go_straight → al perder la línea (estando armado), avanza recto
 """
 
 import rclpy
@@ -39,6 +49,7 @@ TURN_V             = 0.06  # m/s — velocidad lineal durante el giro
 STRAIGHT_TIME      = 3.0   # s — duración del override recto (go_straight)
 STRAIGHT_V         = 0.12  # m/s — velocidad durante el override recto
 SIGN_COOLDOWN      = 4.0   # s — cooldown antes de re-disparar el mismo comando
+ARRIVE_GRACE       = 0.5   # s — sin línea Y sin señal antes de concluir "estoy en el cruce"
 CTRL_DT            = 0.05  # s — ciclo del bucle de control (20 Hz)
 
 # ── Identificadores de estado ─────────────────────────────────────────────────
@@ -78,15 +89,17 @@ class SignBehaviorController(Node):
         self.declare_parameter("turn_v",             TURN_V)
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
-        self.declare_parameter("sign_cooldown",  SIGN_COOLDOWN)
-        self.declare_parameter("wait_for_start", True)
+        self.declare_parameter("sign_cooldown",      SIGN_COOLDOWN)
+        self.declare_parameter("arrive_grace",       ARRIVE_GRACE)
+        self.declare_parameter("wait_for_start",     True)
 
-        self.create_subscription(String,  "/sign/command",      self._cb_command,      10)
-        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected,     10)
-        self.create_subscription(Bool,    "/intersection/stop", self._cb_intersection, 10)
-        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,        10)
-        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,        10)
-        self.create_subscription(Empty,   "/robot/start",       self._cb_start,        10)
+        # /intersection/stop ya NO se usa — ahora escuchamos /line/detected
+        self.create_subscription(String,  "/sign/command",      self._cb_command,       10)
+        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected,      10)
+        self.create_subscription(Bool,    "/line/detected",     self._cb_line_detected, 10)
+        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,         10)
+        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,         10)
+        self.create_subscription(Empty,   "/robot/start",       self._cb_start,         10)
 
         self._pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self._pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
@@ -96,18 +109,20 @@ class SignBehaviorController(Node):
         self._sign_command  = "none"
         self._sign_detected = False
         self._prev_detected = False
-        self._intersection      = False
-        self._prev_intersection = False
+        self._line_detected = False
+        self._arrive_t      = None   # cuándo empezó la condición "sin línea y sin señal"
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
-        self._last_trigger  = {}   # cmd → timestamp del último disparo
+        self._last_trigger  = {}     # cmd → timestamp del último disparo
+
         _wait = self.get_parameter("wait_for_start").value
         _wait_bool = _wait if isinstance(_wait, bool) else str(_wait).lower() not in ("false", "0", "no")
         self._sign_ready = not _wait_bool
 
         self.create_timer(CTRL_DT, self._control_loop)
         self.get_logger().info(
-            "SignBehaviorController listo — escuchando /sign/command y /sign/detected")
+            "SignBehaviorController listo — SIN intersección: el giro se dispara "
+            "al perder la línea Y la señal a la vez")
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -125,8 +140,8 @@ class SignBehaviorController(Node):
     def _cb_detected(self, msg: Bool):
         self._sign_detected = bool(msg.data)
 
-    def _cb_intersection(self, msg: Bool):
-        self._intersection = bool(msg.data)
+    def _cb_line_detected(self, msg: Bool):
+        self._line_detected = bool(msg.data)
 
     def _cb_vel_l(self, msg: Float32):
         self._line_vel_l = float(msg.data)
@@ -157,9 +172,9 @@ class SignBehaviorController(Node):
         S_STOP:             "STOP — detenido",
         S_STOP_HOLD:        "STOP — hold",
         S_WORKERS:          "WORKERS — velocidad reducida",
-        S_PENDING_LEFT:     "TURN LEFT detectado — esperando intersección",
-        S_PENDING_RIGHT:    "TURN RIGHT detectado — esperando intersección",
-        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — esperando intersección",
+        S_PENDING_LEFT:     "TURN LEFT detectado — siguiendo línea hasta el cruce",
+        S_PENDING_RIGHT:    "TURN RIGHT detectado — siguiendo línea hasta el cruce",
+        S_PENDING_STRAIGHT: "GO STRAIGHT detectado — siguiendo línea hasta el cruce",
         S_APPROACH_LEFT:    "TURN LEFT — tramo recto previo",
         S_APPROACH_RIGHT:   "TURN RIGHT — tramo recto previo",
         S_TURNING_LEFT:     "TURN LEFT — girando",
@@ -196,20 +211,17 @@ class SignBehaviorController(Node):
         falling = not detected and self._prev_detected   # señal desaparece
         self._prev_detected = detected
 
-        intersection = self._intersection
-        inter_rising = intersection and not self._prev_intersection   # llega a la intersección
-        self._prev_intersection = intersection
-
         p = self.get_parameter
-        gw_time  = p("give_way_stop_time").value
-        sh_time  = p("stop_hold_time").value
-        wk_fact  = p("workers_factor").value
-        app_time = p("approach_time").value
-        t_time   = p("turn_time").value
-        t_omg    = p("turn_omega").value
-        t_v      = p("turn_v").value
-        s_time   = p("straight_time").value
-        s_v      = p("straight_v").value
+        gw_time   = p("give_way_stop_time").value
+        sh_time   = p("stop_hold_time").value
+        wk_fact   = p("workers_factor").value
+        app_time  = p("approach_time").value
+        t_time    = p("turn_time").value
+        t_omg     = p("turn_omega").value
+        t_v       = p("turn_v").value
+        s_time    = p("straight_time").value
+        s_v       = p("straight_v").value
+        arr_grace = p("arrive_grace").value
 
         # ── IDLE: espera nuevo comando ─────────────────────────────────────
         if self._state == S_IDLE:
@@ -265,17 +277,34 @@ class SignBehaviorController(Node):
                 self._enter(S_IDLE)
                 self._passthrough()
 
-        # ── PENDING_*: sigue la línea hasta llegar a la intersección ───────
+        # ── PENDING_*: sigue la línea hasta el cruce. El cruce se concluye en
+        #    cuanto se PIERDE LA LÍNEA (con señal visible o no) sostenido
+        #    arrive_grace s. Durante ese margen avanza recto, nunca se para.
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
-            if inter_rising:
+            line_det = self._line_detected
+
+            if not line_det:
+                if self._arrive_t is None:
+                    self._arrive_t = self._now()
+                lost_for = self._now() - self._arrive_t
+            else:
+                self._arrive_t = None
+                lost_for = 0.0
+
+            if self._arrive_t is not None and lost_for >= arr_grace:
+                self._arrive_t = None
                 if self._state == S_PENDING_LEFT:
                     self._enter(S_APPROACH_LEFT)
                 elif self._state == S_PENDING_RIGHT:
                     self._enter(S_APPROACH_RIGHT)
                 else:
                     self._enter(S_GOING_STRAIGHT)
+            elif line_det:
+                self._passthrough()                       # sigue la línea mientras la veas
             else:
-                self._passthrough()
+                # línea perdida, dentro del margen: avanza recto, NO te pares
+                vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, 0.0)
+                self._publish(vl, vr)
 
         # ── APPROACH_LEFT / APPROACH_RIGHT: tramo recto previo al giro ─────
         elif self._state == S_APPROACH_LEFT:
