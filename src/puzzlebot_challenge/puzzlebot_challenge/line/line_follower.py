@@ -7,13 +7,13 @@ WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1
 
-KP = 0.32
+KP = 0.45
 KD = 0.14
-KA = 0.15
+KA = 0.35
 
 V_BASE    = 0.15    # m/s cruise speed
 V_MIN     = 0.05   # m/s velocidad mínima durante corrección
-OMEGA_MAX = 1.2    # rad/s — limita cuánto puede corregir de golpe
+OMEGA_MAX = 1.8    # rad/s — limita cuánto puede corregir de golpe
 
 SHIFT_SCALE  = 160.0
 ANGLE_SCALE  = 30.0
