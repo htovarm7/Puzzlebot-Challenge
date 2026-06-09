@@ -11,7 +11,7 @@ KP = 0.45
 KD = 0.14
 KA = 0.35
 
-V_BASE    = 0.15    # m/s cruise speed
+V_BASE    = 0.1    # m/s cruise speed
 V_MIN     = 0.05   # m/s velocidad mínima durante corrección
 OMEGA_MAX = 1.8    # rad/s — limita cuánto puede corregir de golpe
 
