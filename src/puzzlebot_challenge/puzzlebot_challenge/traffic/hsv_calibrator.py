@@ -143,6 +143,8 @@ class HsvCalibrator:
 
     # ── Vision ────────────────────────────────────────────────────────────────
 
+    _CLOSE_KERNEL = np.ones((7, 7), np.uint8)
+
     def _compute_mask(self, frame_bgr: np.ndarray, color: str) -> np.ndarray:
         hsv  = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
@@ -150,20 +152,48 @@ class HsvCalibrator:
             lo = np.array([rv["h_min"], rv["s_min"], rv["v_min"]])
             hi = np.array([rv["h_max"], rv["s_max"], rv["v_max"]])
             mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+        # Mismo cierre morfológico que usa el detector real, para que el
+        # calibrador muestre la máscara/circularidad tal como las verá el nodo.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._CLOSE_KERNEL)
         return mask
+
+    @staticmethod
+    def _best_circle(mask: np.ndarray) -> tuple[float, float, tuple | None]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_circ, best_area, best_center = 0.0, 0.0, None
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < 10:
+                continue
+            perim = cv2.arcLength(cnt, True)
+            if perim == 0:
+                continue
+            circ = (4.0 * np.pi * area) / (perim ** 2)
+            if circ > best_circ:
+                best_circ, best_area = circ, area
+                M = cv2.moments(cnt)
+                if M["m00"] > 0:
+                    best_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+        return best_circ, best_area, best_center
 
     def _render(self, frame_bgr: np.ndarray, source_label: str):
         self._sync_trackbars()
         mask = self._compute_mask(frame_bgr, self.active_color)
         n_px = int(np.sum(mask > 0))
+        circ, area, center = self._best_circle(mask)
 
         overlay = np.full_like(frame_bgr, HIGHLIGHT_BGR[self.active_color])
         blended = frame_bgr.copy()
         blended[mask > 0] = cv2.addWeighted(frame_bgr, 0.3, overlay, 0.7, 0)[mask > 0]
 
+        if center and area > 0:
+            radius = int(np.sqrt(area / np.pi))
+            cv2.circle(blended, center, radius, HIGHLIGHT_BGR[self.active_color], 2)
+
         has_r2 = "range2" in self.ranges[self.active_color]
         help_r = "1/2:rango  " if has_r2 else ""
         info   = (f"{self.active_color.upper()} | {source_label} | px={n_px} | "
+                  f"area={int(area)} | circ={circ:.2f} | "
                   f"r/g/y:color  {help_r}n/p:img  s:guardar  q:salir")
         cv2.putText(blended, info, (4, blended.shape[0] - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
