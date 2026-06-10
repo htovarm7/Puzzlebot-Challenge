@@ -7,10 +7,9 @@ Nodos (Jetson):
   1. picam_publisher          – driver cámara CSI
   2. line_detector            – /line/shift, /line/angle, /line/detected, /line/intersection
   3. traffic_detector (HSV)   – /traffic_light  (red | yellow | green | none)
-  4. sign_detector (YOLO)     – /sign/command, /sign/detected
-  5. line_follower            – control PD de línea
+  4. line_follower            – control PD de línea
                                  ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
-  6. sign_behavior_controller – intercepta velocidades del line_follower
+  5. sign_behavior_controller – intercepta velocidades del line_follower
                                  y aplica comportamientos por señal:
                                    give_way       → sigue línea, para 2 s al perder la señal
                                    stop           → para mientras esté visible + hold
@@ -19,7 +18,11 @@ Nodos (Jetson):
                                    turn_right     → al perder la señal, gira derecha
                                    go_straight    → sigue recto al perder la señal
                                  ↳ publica → /VelocitySetL, /VelocitySetR
-  7. motor_watchdog           – para motores si no llegan comandos
+  6. motor_watchdog           – para motores si no llegan comandos
+
+NOTA: sign_detector (YOLO) se corre por separado en otra terminal de la Jetson
+      (ros2 run puzzlebot_challenge sign_detector), dejándolo siempre corriendo
+      para no tener que reiniciar la inferencia si se mata este launch.
 
 Prioridad de control:
   1° /traffic_light  red/yellow → stop  (en line_follower)
@@ -32,36 +35,11 @@ Uso:
 """
 
 import os
-import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-
-def _find_libgomp() -> str:
-    existing = os.environ.get('LD_PRELOAD', '')
-    if 'libgomp' in existing:
-        return existing
-    # Try known Jetson paths first to avoid slow find
-    for candidate in (
-        '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
-        '/usr/lib/x86_64-linux-gnu/libgomp.so.1',
-    ):
-        if os.path.exists(candidate):
-            return candidate
-    for search_cmd in (
-        'find /home /usr /opt -name "libgomp*.so*" -path "*/torch*" 2>/dev/null | head -1',
-        'find /usr/lib -name "libgomp.so.1" 2>/dev/null | head -1',
-    ):
-        try:
-            out = subprocess.check_output(search_cmd, shell=True, text=True, timeout=5).strip()
-            if out:
-                return out
-        except Exception:
-            pass
-    return ''
 
 
 def generate_launch_description():
@@ -92,11 +70,6 @@ def generate_launch_description():
         DeclareLaunchArgument('straight_v',     default_value='0.12', description='Velocidad go_straight [m/s]'),
         DeclareLaunchArgument('sign_cooldown',  default_value='4.0',  description='Cooldown entre señales iguales [s]'),
         DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
-        # YOLO
-        DeclareLaunchArgument('conf_threshold', default_value='0.70', description='Umbral confianza YOLO (0-1)'),
-        DeclareLaunchArgument('min_det_area',   default_value='2000', description='Área mínima bbox para detectar señal [px²]'),
-        DeclareLaunchArgument('imgsz',          default_value='320',  description='Tamaño imagen inferencia YOLO'),
-        DeclareLaunchArgument('infer_rate_hz',  default_value='8.0',  description='Frecuencia máxima inferencia YOLO [Hz]'),
     ]
 
     picam = Node(
@@ -128,20 +101,6 @@ def generate_launch_description():
         executable='intersection_detector',
         name='intersection_detector',
         parameters=[{'params_config': inter_cfg}],
-        output='screen',
-    )
-
-    sign_detector = Node(
-        package='puzzlebot_challenge',
-        executable='sign_detector',
-        name='sign_detector',
-        parameters=[{
-            'image_topic':    '/camera/image_raw',
-            'conf_threshold': LaunchConfiguration('conf_threshold'),
-            'imgsz':          LaunchConfiguration('imgsz'),
-            'min_det_area':   LaunchConfiguration('min_det_area'),
-            'infer_rate_hz':  LaunchConfiguration('infer_rate_hz'),
-        }],
         output='screen',
     )
 
@@ -184,24 +143,16 @@ def generate_launch_description():
         output='screen',
     )
 
-    libgomp = _find_libgomp()
     env_actions = [
         SetEnvironmentVariable('PYTHONUNBUFFERED', '1'),
         SetEnvironmentVariable('GST_DEBUG', '0'),
     ]
-    if libgomp:
-        env_actions.append(SetEnvironmentVariable('LD_PRELOAD', libgomp))
-        env_actions.append(LogInfo(msg=f'[final.launch] LD_PRELOAD={libgomp}'))
-    else:
-        env_actions.append(
-            LogInfo(msg='[final.launch] WARN: libgomp no encontrado — torch puede fallar'))
 
     return LaunchDescription(env_actions + args + [
         picam,
         line_detector,
         traffic_detector,
         intersection_detector,
-        sign_detector,
         line_follower,
         sign_behavior,
     ])
