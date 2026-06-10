@@ -22,6 +22,7 @@ Usa `ros2 run puzzlebot_challenge hsv_calibrator` para generar el YAML.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -35,6 +36,18 @@ from rcl_interfaces.msg import ParameterDescriptor
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
+
+from ament_index_python.packages import get_package_share_directory
+
+
+def _default_hsv_config_path() -> str:
+    """Ruta al traffic_hsv.yaml instalado del paquete (vacío si no existe)."""
+    try:
+        share_dir = get_package_share_directory('puzzlebot_challenge')
+        path = os.path.join(share_dir, 'config', 'traffic_hsv.yaml')
+        return path if os.path.exists(path) else ''
+    except Exception:
+        return ''
 
 # ── Rangos HSV por defecto (fallback si no hay YAML) ─────────────────────────
 _DEFAULT_RANGOS_HSV = {
@@ -191,9 +204,12 @@ class TrafficLightDetection:
         if not valid:
             return "none", scores
 
-        # Among valid colors pick the one with the highest circularity
-        best = max(valid, key=lambda c: valid[c]["circularity"])
-        return best, scores
+        # Edge case: más de un color encendido a la vez → semáforo averiado.
+        # Se reporta "red" (parar) por seguridad en vez de elegir uno al azar.
+        if len(valid) > 1:
+            return "red", scores
+
+        return next(iter(valid)), scores
 
 
 # ── Nodo ROS2 ─────────────────────────────────────────────────────────────────
@@ -221,7 +237,7 @@ class TrafficLightNode(Node):
             "image_topic", "/camera/image_raw",
             ParameterDescriptor(description="Tópico de imagen de entrada"))
         self.declare_parameter(
-            "hsv_config", "",
+            "hsv_config", _default_hsv_config_path(),
             ParameterDescriptor(description="Ruta al YAML de calibración HSV (traffic_hsv.yaml)"))
         self.declare_parameter(
             "require_housing", True,
