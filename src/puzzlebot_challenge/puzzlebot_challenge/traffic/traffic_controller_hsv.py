@@ -138,16 +138,17 @@ class TrafficLightDetection:
 
     _CLOSE_KERNEL = np.ones((7, 7), np.uint8)
 
-    @staticmethod
-    def _best_circle_score(mask: np.ndarray) -> tuple[float, float, tuple]:
+    def _best_circle_score(self, mask: np.ndarray) -> tuple[float, float, tuple]:
         """
-        Finds the most circular contour in the mask.
+        Finds the most circular contour in the mask, prioritizing contours
+        that meet min_area so a tiny but very round speck (LED reflection,
+        background noise) doesn't outrank the actual (larger) blob.
         Returns (circularity, area, center_xy) of the best candidate,
         or (0, 0, None) if none passes the basic size filter.
         """
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
-        best_circ, best_area, best_center = 0.0, 0.0, None
+        candidates = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < 10:               # ignore tiny noise
@@ -156,15 +157,19 @@ class TrafficLightDetection:
             if perim == 0:
                 continue
             circ = (4.0 * np.pi * area) / (perim ** 2)
-            if circ > best_circ:
-                best_circ   = circ
-                best_area   = area
-                M           = cv2.moments(cnt)
-                if M["m00"] > 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    best_center = (cx, cy)
-        return best_circ, best_area, best_center
+            M = cv2.moments(cnt)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            candidates.append((circ, area, (cx, cy)))
+
+        if not candidates:
+            return 0.0, 0.0, None
+
+        big_enough = [c for c in candidates if c[1] >= self.min_area]
+        pool = big_enough if big_enough else candidates
+        return max(pool, key=lambda c: c[0])
 
     def detect_state(self, image_bgr: np.ndarray) -> tuple[str, dict]:
         """
