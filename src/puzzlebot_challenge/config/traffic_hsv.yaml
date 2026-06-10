@@ -25,9 +25,9 @@
         v_max: 255
     green:
       range1:
-        h_min: 45
-        h_max: 85
-        s_min: 80
+        h_min: 40
+        h_max: 90
+        s_min: 50
         s_max: 255
-        v_min: 80
+        v_min: 60
         v_max: 255

@@ -136,6 +136,8 @@ class TrafficLightDetection:
         dark_ratio = float(np.sum(ring_v < self.housing_dark_thr)) / len(ring_v)
         return dark_ratio >= self.housing_dark_frac
 
+    _CLOSE_KERNEL = np.ones((7, 7), np.uint8)
+
     @staticmethod
     def _best_circle_score(mask: np.ndarray) -> tuple[float, float, tuple]:
         """
@@ -183,6 +185,10 @@ class TrafficLightDetection:
             mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
             for lo, hi in rangos:
                 mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+
+            # Cierra agujeros (centro sobreexpuesto/desaturado de los LEDs)
+            # para que el blob quede sólido y la circularidad sea correcta.
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._CLOSE_KERNEL)
 
             circ, area, center = self._best_circle_score(mask)
             scores[color] = {"circularity": circ, "area": area, "center": center}
@@ -349,6 +355,7 @@ class TrafficLightNode(Node):
             mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
             for lo, hi in rangos:
                 mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.detector._CLOSE_KERNEL)
 
             s      = scores.get(color, {})
             center = s.get("center")
