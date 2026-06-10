@@ -18,20 +18,17 @@ import numpy as np
 import cv2
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import ParameterDescriptor
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
 
+from puzzlebot_challenge.traffic.traffic_controller_hsv import (
+    _DEFAULT_RANGOS_HSV, _default_hsv_config_path, _load_hsv_yaml,
+)
 
-# Rangos HSV — mismos que los otros detectores
-RANGOS_HSV = {
-    "red":    [(np.array([0,   80, 80]), np.array([8,   255, 255])),
-               (np.array([172, 80, 80]), np.array([180, 255, 255]))],
-    "yellow": [(np.array([18,  80, 80]), np.array([32,  255, 255]))],
-    "green":  [(np.array([45,  80, 80]), np.array([85,  255, 255]))],
-}
 
-def classify_color_in_circle(frame_bgr, cx, cy, r):
+def classify_color_in_circle(frame_bgr, cx, cy, r, rangos_hsv):
     """
     Recorta el círculo (con una máscara para no contar pixeles fuera del círculo)
     y devuelve (color_dominante, conteos, fracción_del_círculo_coloreada).
@@ -56,7 +53,7 @@ def classify_color_in_circle(frame_bgr, cx, cy, r):
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
 
     counts = {}
-    for color, rangos in RANGOS_HSV.items():
+    for color, rangos in rangos_hsv.items():
         color_mask = sum(cv2.inRange(hsv, lo, hi) for lo, hi in rangos)
         # Intersección con la máscara circular
         final = cv2.bitwise_and(color_mask, color_mask, mask=mask)
@@ -91,6 +88,18 @@ class TrafficLightCirclesNode(Node):
 
         # Aceptación
         self.declare_parameter('min_fill_ratio', 0.20) # % mínimo del círculo que debe estar coloreado
+
+        self.declare_parameter(
+            'hsv_config', _default_hsv_config_path(),
+            ParameterDescriptor(description="Ruta al YAML de calibración HSV (traffic_hsv.yaml)"))
+
+        hsv_path   = self.get_parameter('hsv_config').value
+        hsv_ranges = _load_hsv_yaml(hsv_path)
+        if hsv_ranges:
+            self.get_logger().info(f"Rangos HSV cargados desde: {hsv_path}")
+        else:
+            self.get_logger().info("Usando rangos HSV por defecto (sin YAML)")
+        self.rangos_hsv = hsv_ranges or _DEFAULT_RANGOS_HSV
 
         image_topic  = self.get_parameter('image_topic').value
         output_topic = self.get_parameter('output_topic').value
@@ -161,7 +170,7 @@ class TrafficLightCirclesNode(Node):
         best_score = 0.0    # fill_ratio del mejor candidato
 
         for (cx, cy, r) in circles:
-            color, counts, fill = classify_color_in_circle(frame, cx, cy, r)
+            color, counts, fill = classify_color_in_circle(frame, cx, cy, r, self.rangos_hsv)
             if color == "none" or fill < min_fill:
                 if debug:
                     self.get_logger().info(
