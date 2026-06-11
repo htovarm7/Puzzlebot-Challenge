@@ -141,7 +141,7 @@ class SignDetectorNode(Node):
         self.declare_parameter("imgsz",          320)
         self.declare_parameter("min_det_area",   2000)
         self.declare_parameter("min_traffic_light_area", 2000)
-        self.declare_parameter("infer_rate_hz",  8.0)
+        self.declare_parameter("infer_rate_hz",  5.0)
 
         image_topic         = self.get_parameter("image_topic").value
         self._conf          = float(self.get_parameter("conf_threshold").value)
