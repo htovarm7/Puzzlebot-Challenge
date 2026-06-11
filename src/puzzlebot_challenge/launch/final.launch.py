@@ -6,10 +6,9 @@ Launch final para el desafío completo.
 Nodos (Jetson):
   1. picam_publisher          – driver cámara CSI
   2. line_detector            – /line/shift, /line/angle, /line/detected, /line/intersection
-  3. traffic_detector (HSV)   – /traffic_light  (red | yellow | green | none)
-  4. line_follower            – control PD de línea
+  3. line_follower            – control PD de línea
                                  ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
-  5. sign_behavior_controller – intercepta velocidades del line_follower
+  4. sign_behavior_controller – intercepta velocidades del line_follower
                                  y aplica comportamientos por señal:
                                    give_way       → sigue línea, para 2 s al perder la señal
                                    stop           → para mientras esté visible + hold
@@ -18,14 +17,16 @@ Nodos (Jetson):
                                    turn_right     → al perder la señal, gira derecha
                                    go_straight    → sigue recto al perder la señal
                                  ↳ publica → /VelocitySetL, /VelocitySetR
-  6. motor_watchdog           – para motores si no llegan comandos
+  5. motor_watchdog           – para motores si no llegan comandos
 
 NOTA: sign_detector (YOLO) se corre por separado en otra terminal de la Jetson
       (ros2 run puzzlebot_challenge sign_detector), dejándolo siempre corriendo
       para no tener que reiniciar la inferencia si se mata este launch.
+      El mismo modelo detecta señales y semáforo (Red/Yellow/Green-Light),
+      publicando /sign/command y /traffic_light (red|yellow|green|none).
 
 Prioridad de control:
-  1° /traffic_light  red/yellow → stop  (en line_follower)
+  1° /traffic_light  red/yellow → stop  (en sign_behavior_controller)
   2° sign_behavior_controller   → acción por señal
   3° /line/*                    → seguimiento de línea PD
 
@@ -46,7 +47,6 @@ def generate_launch_description():
     pkg_share  = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
-    hsv_cfg    = os.path.join(pkg_share, 'config', 'traffic_hsv.yaml')
     inter_cfg  = os.path.join(pkg_share, 'config', 'intersection_params.yaml')
 
     # ── Argumentos ──────────────────────────────────────────────────────────────
@@ -85,14 +85,6 @@ def generate_launch_description():
         executable='line_detector',
         name='line_detector',
         parameters=[{'params_config': line_cfg}],
-        output='screen',
-    )
-
-    traffic_detector = Node(
-        package='puzzlebot_challenge',
-        executable='traffic_detector',
-        name='traffic_light_detector',
-        parameters=[{'hsv_config': hsv_cfg}],
         output='screen',
     )
 
@@ -151,7 +143,6 @@ def generate_launch_description():
     return LaunchDescription(env_actions + args + [
         picam,
         line_detector,
-        traffic_detector,
         intersection_detector,
         line_follower,
         sign_behavior,

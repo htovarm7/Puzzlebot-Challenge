@@ -95,6 +95,7 @@ class SignBehaviorController(Node):
         # /intersection/stop ya NO se usa — ahora escuchamos /line/detected
         self.create_subscription(String,  "/sign/command",      self._cb_command,       10)
         self.create_subscription(Bool,    "/sign/detected",     self._cb_detected,      10)
+        self.create_subscription(String,  "/traffic_light",     self._cb_traffic,       10)
         self.create_subscription(Bool,    "/line/detected",     self._cb_line_detected, 10)
         self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,         10)
         self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,         10)
@@ -107,6 +108,7 @@ class SignBehaviorController(Node):
         self._state_start   = self._now()
         self._sign_command  = "none"
         self._sign_detected = False
+        self._traffic_state = "none"
         self._prev_detected = False
         self._line_detected = False
         self._line_vel_l    = 0.0
@@ -137,6 +139,9 @@ class SignBehaviorController(Node):
 
     def _cb_detected(self, msg: Bool):
         self._sign_detected = bool(msg.data)
+
+    def _cb_traffic(self, msg: String):
+        self._traffic_state = msg.data.lower()
 
     def _cb_line_detected(self, msg: Bool):
         self._line_detected = bool(msg.data)
@@ -198,6 +203,11 @@ class SignBehaviorController(Node):
 
     def _control_loop(self):
         if not self._sign_ready:
+            self._stop()
+            return
+
+        # ── PRIORIDAD MÁXIMA: semáforo en rojo/amarillo → detener ──────────
+        if self._traffic_state in ("red", "yellow"):
             self._stop()
             return
 

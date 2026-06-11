@@ -121,6 +121,13 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
 
 DEBOUNCE_FRAMES = 2   # frames consecutivos para confirmar detección
 
+# Clases del semáforo dentro del mismo modelo YOLO → estado /traffic_light
+TRAFFIC_LIGHT_LABELS = {
+    "red_light":    "red",
+    "yellow_light": "yellow",
+    "green_light":  "green",
+}
+
 
 class SignDetectorNode(Node):
 
@@ -152,16 +159,22 @@ class SignDetectorNode(Node):
         self._infer_thread = threading.Thread(
             target=self._infer_loop, daemon=True)
 
-        # debounce
+        # debounce — señales
         self._pending_cmd    = "none"
         self._pending_count  = 0
         self._confirmed_cmd  = "none"
+
+        # debounce — semáforo
+        self._pending_traffic   = "none"
+        self._pending_traffic_count = 0
+        self._confirmed_traffic = "none"
 
         self.sub_img = self.create_subscription(
             Image, image_topic, self._on_image, 10)
 
         self.pub_command  = self.create_publisher(String, "/sign/command",  10)
         self.pub_detected = self.create_publisher(Bool,   "/sign/detected", 10)
+        self.pub_traffic  = self.create_publisher(String, "/traffic_light", 10)
         self.pub_debug    = self.create_publisher(Image,  "/vision/signs",  10)
 
         self.get_logger().info(
@@ -255,10 +268,14 @@ class SignDetectorNode(Node):
             # --- FIN DIAGNÓSTICO ---
 
             dets = [d for d in dets if d[3] * d[4] >= self._min_area]
-            raw_cmd = dets[0][0] if dets else "none"
+
+            # separar detecciones de semáforo (Red/Yellow/Green-Light) del
+            # resto de señales — el modelo único detecta ambas categorías
+            traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS]
+            sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS]
+
             # tomar la detección de mayor área si hay varias
-            if dets:
-                raw_cmd = max(dets, key=lambda d: d[3] * d[4])[0]
+            raw_cmd = max(sign_dets, key=lambda d: d[3] * d[4])[0] if sign_dets else "none"
 
             # debounce: confirmar tras DEBOUNCE_FRAMES frames consecutivos
             if raw_cmd == self._pending_cmd:
@@ -274,7 +291,7 @@ class SignDetectorNode(Node):
 
             if command != self._confirmed_cmd:
                 self._confirmed_cmd = command
-                best = max(dets, key=lambda d: d[3] * d[4]) if dets else None
+                best = max(sign_dets, key=lambda d: d[3] * d[4]) if sign_dets else None
                 if best:
                     self.get_logger().info(
                         f"DETECTED: {command.upper()} "
@@ -282,10 +299,33 @@ class SignDetectorNode(Node):
                 else:
                     self.get_logger().info("DETECTED: NONE")
 
+            # debounce del semáforo (mismo esquema, salida red|yellow|green|none)
+            raw_traffic = "none"
+            if traffic_dets:
+                best_traffic = max(traffic_dets, key=lambda d: d[3] * d[4])
+                raw_traffic = TRAFFIC_LIGHT_LABELS[best_traffic[0]]
+
+            if raw_traffic == self._pending_traffic:
+                self._pending_traffic_count += 1
+            else:
+                self._pending_traffic       = raw_traffic
+                self._pending_traffic_count = 1
+
+            if self._pending_traffic_count >= DEBOUNCE_FRAMES:
+                traffic_state = self._pending_traffic
+            else:
+                traffic_state = self._confirmed_traffic
+
+            if traffic_state != self._confirmed_traffic:
+                self._confirmed_traffic = traffic_state
+                self.get_logger().info(f"TRAFFIC LIGHT: {traffic_state.upper()}")
+
             c_msg = String(); c_msg.data = command
             d_msg = Bool();   d_msg.data = (command != "none")
+            t_msg = String(); t_msg.data = traffic_state
             self.pub_command.publish(c_msg)
             self.pub_detected.publish(d_msg)
+            self.pub_traffic.publish(t_msg)
             self._publish_debug(frame, dets, command)
 
     def _publish_debug(self, frame, dets, command):
