@@ -139,9 +139,9 @@ class SignDetectorNode(Node):
         self.declare_parameter("yellow_light_conf_threshold", 0.50)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
-        self.declare_parameter("min_det_area",   6000)
-        self.declare_parameter("min_traffic_light_area", 800)
-        self.declare_parameter("infer_rate_hz",  5.0)
+        self.declare_parameter("min_det_area",   2000)
+        self.declare_parameter("min_traffic_light_area", 2000)
+        self.declare_parameter("infer_rate_hz",  8.0)
 
         image_topic         = self.get_parameter("image_topic").value
         self._conf          = float(self.get_parameter("conf_threshold").value)
