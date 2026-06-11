@@ -206,9 +206,16 @@ class SignBehaviorController(Node):
             self._stop()
             return
 
-        # ── PRIORIDAD MÁXIMA: semáforo en rojo/amarillo → detener ──────────
-        if self._traffic_state in ("red", "yellow"):
+        # ── PRIORIDAD MÁXIMA: semáforo en rojo → detener ───────────────────
+        if self._traffic_state == "red":
             self._stop()
+            return
+
+        # ── semáforo en amarillo → reducir velocidad ───────────────────────
+        if self._traffic_state == "yellow":
+            wk_fact = self.get_parameter("workers_factor").value
+            self._publish(self._line_vel_l * wk_fact,
+                          self._line_vel_r * wk_fact)
             return
 
         elapsed  = self._now() - self._state_start
