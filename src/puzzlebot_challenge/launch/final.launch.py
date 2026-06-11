@@ -54,7 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument('kp',             default_value='0.3',  description='P gain'),
         DeclareLaunchArgument('kd',             default_value='0.08', description='D gain'),
         DeclareLaunchArgument('ka',             default_value='0.2',  description='Peso corrección ángulo'),
-        DeclareLaunchArgument('v_base',         default_value='0.15', description='Velocidad base [m/s]'),
+        DeclareLaunchArgument('v_base',         default_value='0.1', description='Velocidad base [m/s]'),
         DeclareLaunchArgument('crossing_time',  default_value='3.0',  description='Segundos en intersección recto [s]'),
         DeclareLaunchArgument('cooldown_time',  default_value='3.0',  description='Cooldown entre intersecciones [s]'),
         # Sign behaviors
@@ -65,9 +65,9 @@ def generate_launch_description():
         DeclareLaunchArgument('turn_time',      default_value='1.8',  description='Duración del giro [s]'),
         DeclareLaunchArgument('turn_omega',     default_value='0.7',  description='Velocidad angular giro [rad/s]'),
         DeclareLaunchArgument('turn_v',         default_value='0.06', description='Velocidad lineal durante giro [m/s]'),
-        DeclareLaunchArgument('straight_time',  default_value='3.0',  description='Duración go_straight override [s]'),
+        DeclareLaunchArgument('straight_time',  default_value='4.0',  description='Duración go_straight override [s]'),
         DeclareLaunchArgument('straight_v',     default_value='0.12', description='Velocidad go_straight [m/s]'),
-        DeclareLaunchArgument('sign_cooldown',  default_value='4.0',  description='Cooldown entre señales iguales [s]'),
+        DeclareLaunchArgument('sign_cooldown',  default_value='1.0',  description='Cooldown entre señales iguales [s]'),
         DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
     ]
 
