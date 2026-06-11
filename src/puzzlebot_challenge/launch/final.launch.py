@@ -5,7 +5,7 @@ Launch final para el desafío completo.
 
 Nodos (Jetson):
   1. picam_publisher          – driver cámara CSI
-  2. line_detector            – /line/shift, /line/angle, /line/detected, /line/intersection
+  2. line_detector            – /line/shift, /line/angle, /line/detected
   3. line_follower            – control PD de línea
                                  ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
   4. sign_behavior_controller – intercepta velocidades del line_follower
@@ -47,7 +47,6 @@ def generate_launch_description():
     pkg_share  = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
-    inter_cfg  = os.path.join(pkg_share, 'config', 'intersection_params.yaml')
 
     # ── Argumentos ──────────────────────────────────────────────────────────────
     args = [
@@ -85,14 +84,6 @@ def generate_launch_description():
         executable='line_detector',
         name='line_detector',
         parameters=[{'params_config': line_cfg}],
-        output='screen',
-    )
-
-    intersection_detector = Node(
-        package='puzzlebot_challenge',
-        executable='intersection_detector',
-        name='intersection_detector',
-        parameters=[{'params_config': inter_cfg}],
         output='screen',
     )
 
@@ -143,7 +134,6 @@ def generate_launch_description():
     return LaunchDescription(env_actions + args + [
         picam,
         line_detector,
-        intersection_detector,
         line_follower,
         sign_behavior,
     ])
