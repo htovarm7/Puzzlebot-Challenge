@@ -139,12 +139,14 @@ class SignDetectorNode(Node):
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
         self.declare_parameter("min_det_area",   6000)
+        self.declare_parameter("min_traffic_light_area", 800)
         self.declare_parameter("infer_rate_hz",  5.0)
 
         image_topic         = self.get_parameter("image_topic").value
         self._conf          = float(self.get_parameter("conf_threshold").value)
         self._imgsz         = int(self.get_parameter("imgsz").value)
         self._min_area      = int(self.get_parameter("min_det_area").value)
+        self._min_traffic_area = int(self.get_parameter("min_traffic_light_area").value)
         self._infer_rate_hz = float(self.get_parameter("infer_rate_hz").value)
         model_path          = self.get_parameter("model_path").value
 
@@ -267,12 +269,14 @@ class SignDetectorNode(Node):
             self.get_logger().info(f"[DIAG] frame={diag_count}  {raw_str}")
             # --- FIN DIAGNÓSTICO ---
 
-            dets = [d for d in dets if d[3] * d[4] >= self._min_area]
-
             # separar detecciones de semáforo (Red/Yellow/Green-Light) del
-            # resto de señales — el modelo único detecta ambas categorías
-            traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS]
-            sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS]
+            # resto de señales — el modelo único detecta ambas categorías,
+            # pero el semáforo suele verse mucho más pequeño que las señales
+            # así que cada categoría usa su propio umbral de área mínima
+            traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS
+                            and d[3] * d[4] >= self._min_traffic_area]
+            sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS
+                            and d[3] * d[4] >= self._min_area]
 
             # tomar la detección de mayor área si hay varias
             raw_cmd = max(sign_dets, key=lambda d: d[3] * d[4])[0] if sign_dets else "none"
