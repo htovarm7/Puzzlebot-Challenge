@@ -136,6 +136,7 @@ class SignDetectorNode(Node):
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
         self.declare_parameter("conf_threshold", 0.70)
+        self.declare_parameter("yellow_light_conf_threshold", 0.50)
         self.declare_parameter("model_path",     self._default_model_path())
         self.declare_parameter("imgsz",          320)
         self.declare_parameter("min_det_area",   6000)
@@ -144,6 +145,7 @@ class SignDetectorNode(Node):
 
         image_topic         = self.get_parameter("image_topic").value
         self._conf          = float(self.get_parameter("conf_threshold").value)
+        self._yellow_conf   = float(self.get_parameter("yellow_light_conf_threshold").value)
         self._imgsz         = int(self.get_parameter("imgsz").value)
         self._min_area      = int(self.get_parameter("min_det_area").value)
         self._min_traffic_area = int(self.get_parameter("min_traffic_light_area").value)
@@ -252,11 +254,15 @@ class SignDetectorNode(Node):
 
             try:
                 dets = yolo_detect(frame, self._model,
-                                   conf_thr=self._conf,
+                                   conf_thr=min(self._conf, self._yellow_conf),
                                    imgsz=self._imgsz)
             except Exception as e:
                 self.get_logger().error(f"YOLO falló: {e}")
                 continue
+
+            # umbral de confianza por clase: yellow_light tiene su propio umbral
+            dets = [d for d in dets if d[5] >= (
+                self._yellow_conf if d[0] == "yellow_light" else self._conf)]
 
             # --- DIAGNÓSTICO TEMPORAL: una línea por frame procesado ---
             diag_count += 1
