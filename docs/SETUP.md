@@ -1,25 +1,25 @@
-# Setup detallado — PuzzleBot Jetson
+# Detailed setup — PuzzleBot Jetson
 
-Esta guía cubre lo que el `README` no entra al detalle: conexión a la Jetson,
-red, troubleshooting de la cámara CSI y servicios opcionales.
+This guide covers what the `README` doesn't detail: connecting to the Jetson,
+networking, CSI camera troubleshooting and optional services.
 
 ---
 
-## 1. Conexión a la Jetson
+## 1. Connecting to the Jetson
 
-### Por Ethernet directo (PC ↔ Jetson)
+### Direct Ethernet (PC ↔ Jetson)
 
-Si conectas la Jetson directo a tu PC con un cable Ethernet y compartes la
-conexión desde NetworkManager (Settings → Network → Ethernet → IPv4 →
-"Shared to other computers"), la Jetson recibirá una IP en `10.42.0.0/24`.
+If you connect the Jetson directly to your PC with an Ethernet cable and share the
+connection from NetworkManager (Settings → Network → Ethernet → IPv4 →
+"Shared to other computers"), the Jetson will get an IP in `10.42.0.0/24`.
 
-Para encontrarla desde el PC:
+To find it from the PC:
 
 ```bash
-ip neigh show dev <interfaz-ethernet>
+ip neigh show dev <ethernet-interface>
 ```
 
-Conéctate por SSH (usuario por defecto del Puzzlebot: `puzzlebot`):
+Connect over SSH (the PuzzleBot default user is `puzzlebot`):
 
 ```bash
 ssh puzzlebot@10.42.0.X
@@ -27,17 +27,17 @@ ssh puzzlebot@10.42.0.X
 
 ### Hostname / MagicDNS
 
-- Para cambiar el nombre del sistema: `sudo hostnamectl set-hostname jetson-X` y
-  edita la línea `127.0.1.1` de `/etc/hosts`.
-- Si usas Tailscale, edita el nombre desde
-  <https://login.tailscale.com/admin/machines> o con
+- To change the system name: `sudo hostnamectl set-hostname jetson-X` and edit the
+  `127.0.1.1` line in `/etc/hosts`.
+- If you use Tailscale, edit the name from
+  <https://login.tailscale.com/admin/machines> or with
   `sudo tailscale set --hostname=jetson-X`.
 
 ---
 
-## 2. Cámara CSI (IMX219)
+## 2. CSI camera (IMX219)
 
-### Verificar que la detecta el kernel
+### Check that the kernel detects it
 
 ```bash
 v4l2-ctl --list-devices
@@ -45,7 +45,7 @@ v4l2-ctl --list-devices
 #     /dev/video0
 ```
 
-### Test rápido sin GUI
+### Quick test without a GUI
 
 ```bash
 gst-launch-1.0 -e nvarguscamerasrc num-buffers=10 sensor-mode=4 ! \
@@ -53,16 +53,16 @@ gst-launch-1.0 -e nvarguscamerasrc num-buffers=10 sensor-mode=4 ! \
   nvjpegenc ! multifilesink location=frame_%03d.jpg
 ```
 
-Debe generar 10 JPGs. Si falla con `Failed to create CaptureSession`:
+It should generate 10 JPGs. If it fails with `Failed to create CaptureSession`:
 
-1. Reinicia el daemon: `sudo systemctl restart nvargus-daemon`.
-2. Si persiste tras un mal kill, **reinicia la Jetson**: `sudo reboot`.
-3. **Nunca uses `kill -9` con `nvargus-daemon`** — deja el sensor en mal
-   estado y solo se recupera con reboot.
+1. Restart the daemon: `sudo systemctl restart nvargus-daemon`.
+2. If it persists after a bad kill, **reboot the Jetson**: `sudo reboot`.
+3. **Never use `kill -9` on `nvargus-daemon`** — it leaves the sensor in a bad
+   state that only recovers with a reboot.
 
-### Modos del sensor IMX219
+### IMX219 sensor modes
 
-| sensor-mode | Resolución  | FPS  |
+| sensor-mode | Resolution  | FPS  |
 |-------------|-------------|------|
 | 0           | 3264×2464   | 21   |
 | 1           | 3264×1848   | 28   |
@@ -71,26 +71,55 @@ Debe generar 10 JPGs. Si falla con `Failed to create CaptureSession`:
 | 4           | 1280×720    | 60   |
 | 5           | 1280×720    | 120  |
 
-El default del workspace es `sensor_mode: 4` (720p @ 60fps), escalado en
-hardware a 320×240 para procesamiento.
+The workspace default is `sensor_mode: 3` (1640×1232 @ 30fps), scaled in hardware
+to 320×240 for processing. Change it in
+[`config/camera.yaml`](../src/puzzlebot_challenge/config/camera.yaml).
 
 ---
 
-## 3. Ver el video desde el PC
+## 3. Viewing the video from the PC
 
-Una vez corriendo `ros2 launch puzzlebot_challenge camera.launch.py`:
+Once `ros2 launch puzzlebot_challenge camera.launch.py` is running:
 
-- **Navegador**: <http://IP-DE-LA-JETSON:8080>
-- **Otro nodo en el PC**: `ros2 topic echo /camera/image_raw` (necesitas que la
-  Jetson y el PC estén en el mismo `ROS_DOMAIN_ID`).
-- **RViz**: `rviz2`, agrega un display de tipo `Image` con el tópico
-  `/camera/image_raw`.
+- **Browser**: <http://JETSON-IP:8080>
+- **Another node on the PC**: `ros2 topic echo /camera/image_raw` (the Jetson and
+  the PC must share the same `ROS_DOMAIN_ID`).
+- **RViz**: `rviz2`, add an `Image` display with the `/camera/image_raw` topic.
+
+> The MJPEG server (`cam_server`) streams the `/vision/line` topic by default (the
+> annotated line-detection frame). Change the `topic` parameter in
+> [`config/camera.yaml`](../src/puzzlebot_challenge/config/camera.yaml) to stream a
+> different feed, e.g. `/vision/signs`, `/vision/traffic` or `/camera/image_raw`.
 
 ---
 
-## 4. Servicio systemd opcional
+## 4. Vision stack feeds
 
-Para que el servidor de cámara arranque solo al encender la Jetson, crea
+The driving stack publishes several annotated debug images you can inspect with the
+MJPEG server, `rqt_image_view` or RViz:
+
+| Topic            | Source              | Shows                                    |
+|------------------|---------------------|------------------------------------------|
+| `/camera/image_raw` | `picam_publisher` | Raw PiCam frame                          |
+| `/vision/line`   | `line_detector`     | Line mask / centroid overlay             |
+| `/vision/signs`  | `sign_detector`     | YOLO bounding boxes + labels             |
+| `/vision/traffic`| `traffic_controller`| Detected traffic-light color             |
+
+### Sign detection on the Jetson
+
+`sign_detector` loads a YOLO model from `share/puzzlebot_challenge/models/`
+(installed from `utils/`). For best performance on the Jetson, use the TensorRT
+`best.engine`; regenerate it with
+[`utils/export_trt.py`](../src/puzzlebot_challenge/utils/export_trt.py) if the
+Ultralytics / TensorRT versions change. If the engine fails to load, the detector
+falls back to `best.onnx` / `best.pt`. Tune `conf_threshold` and `imgsz` via the
+`signs.launch.py` arguments.
+
+---
+
+## 5. Optional systemd service
+
+To start the camera server automatically when the Jetson boots, create
 `/etc/systemd/system/puzzlebot-camera.service`:
 
 ```ini
@@ -109,7 +138,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Activa:
+Enable it:
 
 ```bash
 sudo systemctl daemon-reload
@@ -119,12 +148,14 @@ sudo systemctl status puzzlebot-camera
 
 ---
 
-## 5. Problemas comunes
+## 6. Common issues
 
-| Síntoma | Causa probable | Fix |
-|---------|----------------|-----|
-| `Failed to create CaptureSession` | Daemon Argus colgado | `sudo systemctl restart nvargus-daemon` o reboot |
-| `nvbuf_utils: dmabuf_fd -1` | `nveglglessink` por SSH sin display | Usar `cam_server` (MJPEG) o lanzar desde el monitor físico |
-| `colcon build` no encuentra `cv_bridge` | Falta paquete | `sudo apt install ros-humble-cv-bridge` |
-| `ImportError: flask` | Falta dependencia | `pip3 install flask` |
-| El servidor MJPEG carga pero no muestra | `picam_publisher` no está corriendo o el tópico no coincide | Verifica con `ros2 topic hz /camera/image_raw` |
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Failed to create CaptureSession` | Argus daemon hung | `sudo systemctl restart nvargus-daemon` or reboot |
+| `nvbuf_utils: dmabuf_fd -1` | `nveglglessink` over SSH without a display | Use `cam_server` (MJPEG) or launch from the physical monitor |
+| `colcon build` can't find `cv_bridge` | Missing package | `sudo apt install ros-humble-cv-bridge` |
+| `ImportError: flask` | Missing dependency | `pip3 install flask` |
+| `ModuleNotFoundError: ultralytics` | Missing dependency | `pip3 install -r requirements.txt` |
+| MJPEG server loads but shows nothing | `picam_publisher` not running or topic mismatch | Check with `ros2 topic hz /camera/image_raw` |
+| YOLO is slow / high latency | Running `.pt` instead of TensorRT | Build/use `best.engine`, lower `imgsz`, raise `conf_threshold` |
