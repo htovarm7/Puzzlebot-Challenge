@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""
-line_detector.py
+"""Line detector.
 
-Topics
-------
 Sub : /camera/image_raw   (sensor_msgs/Image)
-Pub : /line/shift         (std_msgs/Float32)   
-      /line/angle         (std_msgs/Float32)   
+Pub : /line/shift         (std_msgs/Float32)
+      /line/angle         (std_msgs/Float32)
       /line/detected      (std_msgs/Bool)
-      /vision/line        (sensor_msgs/Image) 
+      /vision/line        (sensor_msgs/Image)
 """
 
 from __future__ import annotations
@@ -37,8 +34,7 @@ _DEFAULT_PARAMS = {
     "blur":        21,
     "morph":       9,
     "n_track_lines": 3,
-    # Adaptive local threshold mode (1 = on, 0 = classic global)
-    # Needs only adapt_block and adapt_c — no T calibration required.
+    # Adaptive local threshold mode (1 = on, 0 = global). Needs only adapt_block/adapt_c.
     "adaptive":      0,
     "adapt_block":  61,   # neighborhood size (odd, pixels) — larger = smoother
     "adapt_c":      12,   # line must be this many units darker than local mean
@@ -62,7 +58,7 @@ def _load_params_yaml(path: str) -> dict | None:
         return None
 
 class LineDetection:
-    """Same mathematics as `complex_lines.detect`, without trackbars."""
+    """Line detection on a bottom ROI, global or adaptive threshold."""
 
     def __init__(self, params: dict | None = None):
         self.params = dict(_DEFAULT_PARAMS)
@@ -72,14 +68,12 @@ class LineDetection:
         self._T_state: int = int(self.params["T_init"])
 
     def _adaptive_roi(self, gray: np.ndarray) -> tuple[np.ndarray, int, int]:
-        """Threshold adaptativo local: no necesita T_min/T_max/dark_min/dark_max.
-        Cada píxel se compara contra el promedio de su vecindad → robusto a
-        cambios de iluminación y color de piso."""
+        """Local adaptive threshold: robust to lighting and floor color changes."""
         p = self.params
         h = gray.shape[0]
         y_off = int(h * p["roi_top"])
 
-        block = int(p.get("adapt_block", 61)) | 1   # fuerza impar
+        block = int(p.get("adapt_block", 61)) | 1   # force odd
         C     = int(p.get("adapt_c", 12))
 
         binary = cv2.adaptiveThreshold(
@@ -88,7 +82,7 @@ class LineDetection:
             cv2.THRESH_BINARY_INV,
             block, C,
         )
-        return binary[y_off:, :], 0, y_off   # T_used=0 (no aplica)
+        return binary[y_off:, :], 0, y_off   # T_used=0 (not applicable)
 
     def _balance(self, gray: np.ndarray) -> tuple[np.ndarray | None, int, int]:
         p = self.params
@@ -168,7 +162,7 @@ class LineDetection:
         out["T_used"] = T_used
         out["y_off"]  = y_off
 
-        # Morfología
+        # Morphology
         mk = int(p["morph"])
         if mk >= 2:
             kernel = np.ones((mk, mk), np.uint8)
@@ -236,20 +230,20 @@ class LineDetectorNode(Node):
 
         self.declare_parameter(
             "image_topic", "/camera/image_raw",
-            ParameterDescriptor(description="Tópico de imagen de entrada"))
+            ParameterDescriptor(description="Input image topic"))
         self.declare_parameter(
             "params_config", "",
-            ParameterDescriptor(description="Ruta opcional a line_params.yaml"))
+            ParameterDescriptor(description="Optional path to line_params.yaml"))
 
         for k, v in _DEFAULT_PARAMS.items():
             self.declare_parameter(
                 k, float(v) if isinstance(v, float) else v,
-                ParameterDescriptor(description=f"Param de visión: {k}"))
+                ParameterDescriptor(description=f"Vision param: {k}"))
 
         yaml_path = self.get_parameter("params_config").value
         yaml_params = _load_params_yaml(yaml_path)
         if yaml_params:
-            self.get_logger().info(f"Parámetros cargados desde: {yaml_path}")
+            self.get_logger().info(f"Params loaded from: {yaml_path}")
             for k, v in yaml_params.items():
                 self.set_parameters(
                     [rclpy.parameter.Parameter(k,
@@ -258,7 +252,7 @@ class LineDetectorNode(Node):
                         else rclpy.parameter.Parameter.Type.INTEGER,
                         v)])
         else:
-            self.get_logger().info("Usando parámetros por defecto (sin YAML)")
+            self.get_logger().info("Using default params (no YAML)")
 
         self.bridge   = CvBridge()
         self.detector = LineDetection(self._snapshot_params())
@@ -272,13 +266,13 @@ class LineDetectorNode(Node):
         self.pub_debug         = self.create_publisher(Image,   "/vision/line",       10)
 
         self.get_logger().info(
-            f"LineDetectorNode listo | topic={image_topic} | "
+            f"LineDetectorNode ready | topic={image_topic} | "
             f"min_area={self.detector.params['min_area']} | "
             f"roi_top={self.detector.params['roi_top']:.2f}"
         )
 
     def _snapshot_params(self) -> dict:
-        """Lee los parámetros ROS y devuelve un dict para LineDetection."""
+        """Read ROS params into a dict for LineDetection."""
         snap = {}
         for k in _DEFAULT_PARAMS:
             snap[k] = self.get_parameter(k).value
@@ -290,7 +284,7 @@ class LineDetectorNode(Node):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception as e:
-            self.get_logger().warn(f"Fallo conversión de imagen: {e}")
+            self.get_logger().warn(f"Image conversion failed: {e}")
             return
 
         result = self.detector.detect(frame)

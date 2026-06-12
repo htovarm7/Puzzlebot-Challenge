@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""
-sign_detector.py — Detecta señales de tránsito con YOLO.
+"""Traffic sign detector (YOLO).
 
-Tópicos publicados:
-  /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
-  /sign/detected  (std_msgs/Bool)    — True si hay señal activa
-  /vision/signs   (sensor_msgs/Image) — frame anotado
+Pub:
+  /sign/command   (std_msgs/String)   — stop | go_straight | turn_left | turn_right | workers | none
+  /sign/detected  (std_msgs/Bool)     — True if a sign is active
+  /traffic_light  (std_msgs/String)   — red | yellow | green | none
+  /vision/signs   (sensor_msgs/Image) — annotated frame
 """
 
 import ctypes
@@ -52,7 +52,7 @@ def _get_model(model_path: str):
     elif os.path.exists(onnx_path):
         load_path = onnx_path
     else:
-        print(f"[sign_detector] ERROR: no se encontró .engine ni .onnx en {base} — YOLO disabled", flush=True)
+        print(f"[sign_detector] ERROR: no .engine or .onnx found at {base} — YOLO disabled", flush=True)
         return None
     try:
         import sys, traceback, torch
@@ -70,7 +70,7 @@ def _get_model(model_path: str):
         print(f"[sign_detector] model loaded — CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
         import sys, traceback
-        print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
+        print(f"[sign_detector] ERROR loading YOLO: {e}", flush=True)
         traceback.print_exc(file=sys.stdout)
     return _YOLO_MODEL
 
@@ -119,9 +119,9 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return out
 
-DEBOUNCE_FRAMES = 2   # frames consecutivos para confirmar detección
+DEBOUNCE_FRAMES = 2   # consecutive frames to confirm a detection
 
-# Clases del semáforo dentro del mismo modelo YOLO → estado /traffic_light
+# Traffic-light classes within the same YOLO model → /traffic_light state
 TRAFFIC_LIGHT_LABELS = {
     "red_light":    "red",
     "yellow_light": "yellow",
@@ -156,19 +156,19 @@ class SignDetectorNode(Node):
         self._model       = None
         self._model_ready = False
 
-        # hilo de inferencia
+        # inference thread
         self._infer_frame  = None
         self._infer_lock   = threading.Lock()
         self._infer_event  = threading.Event()
         self._infer_thread = threading.Thread(
             target=self._infer_loop, daemon=True)
 
-        # debounce — señales
+        # debounce — signs
         self._pending_cmd    = "none"
         self._pending_count  = 0
         self._confirmed_cmd  = "none"
 
-        # debounce — semáforo
+        # debounce — traffic light
         self._pending_traffic   = "none"
         self._pending_traffic_count = 0
         self._confirmed_traffic = "none"
@@ -184,7 +184,7 @@ class SignDetectorNode(Node):
         self.get_logger().info(
             f"SignDetector | topic={image_topic} | imgsz={self._imgsz} | "
             f"conf>={self._conf:.0%} | min_area={self._min_area}px | "
-            f"debounce={DEBOUNCE_FRAMES}f | cargando modelo en background...")
+            f"debounce={DEBOUNCE_FRAMES}f | loading model in background...")
 
         threading.Thread(
             target=self._load_model_bg, args=(model_path,), daemon=True
@@ -197,10 +197,10 @@ class SignDetectorNode(Node):
         self._model = model
         self._model_ready = True
         self._infer_thread.start()
-        status = "ON" if self._model else "OFF (sin modelo)"
-        self.get_logger().info(f"SignDetector LISTO | YOLO={status}")
+        status = "ON" if self._model else "OFF (no model)"
+        self.get_logger().info(f"SignDetector READY | YOLO={status}")
         self.get_logger().info(
-            ">>> Para arrancar el robot: "
+            ">>> To start the robot: "
             "ros2 topic pub --once /robot/start std_msgs/Empty '{}'")
 
     def _default_model_path(self) -> str:
@@ -212,7 +212,7 @@ class SignDetectorNode(Node):
             return os.path.join(here, "..", "utils", "best.pt")
 
     def _on_image(self, msg: Image):
-        """Callback ROS2: solo convierte y pasa frame al hilo de inferencia."""
+        """ROS2 callback: convert and hand the frame to the inference thread."""
         if not self._model_ready:
             return
         try:
@@ -220,21 +220,18 @@ class SignDetectorNode(Node):
         except Exception:
             return
         with self._infer_lock:
-            self._infer_frame = frame   # siempre el más reciente
+            self._infer_frame = frame   # always the latest
         self._infer_event.set()
 
     def _infer_loop(self):
-        """Hilo dedicado: inferencia YOLO sin bloquear el spin de ROS2."""
+        """Dedicated thread: YOLO inference without blocking the ROS2 spin."""
         try:
-            os.nice(10)  # prioridad más baja que line_detector para ceder CPU
+            os.nice(10)  # lower priority than line_detector to yield CPU
         except OSError:
             pass
 
         min_dt    = 1.0 / max(self._infer_rate_hz, 0.5)
         last_time = 0.0
-
-        # --- DIAGNÓSTICO TEMPORAL: detecciones crudas (sin filtrar), una línea por frame ---
-        diag_count = 0
 
         while rclpy.ok():
             self._infer_event.wait()
@@ -242,7 +239,7 @@ class SignDetectorNode(Node):
 
             now = time.monotonic()
             if now - last_time < min_dt:
-                continue  # frame demasiado reciente — descartar, esperar el siguiente
+                continue  # frame too recent — drop it, wait for the next
 
             with self._infer_lock:
                 frame = self._infer_frame
@@ -257,37 +254,24 @@ class SignDetectorNode(Node):
                                    conf_thr=min(self._conf, self._yellow_conf),
                                    imgsz=self._imgsz)
             except Exception as e:
-                self.get_logger().error(f"YOLO falló: {e}")
+                self.get_logger().error(f"YOLO failed: {e}")
                 continue
 
-            # umbral de confianza por clase: yellow_light tiene su propio umbral
+            # per-class confidence threshold: yellow_light has its own
             dets = [d for d in dets if d[5] >= (
                 self._yellow_conf if d[0] == "yellow_light" else self._conf)]
 
-            # --- DIAGNÓSTICO TEMPORAL: una línea por frame procesado ---
-            diag_count += 1
-            if dets:
-                raw_str = ", ".join(
-                    f"{lbl} conf={c:.2f} bbox={w}x{h} area={w*h}px"
-                    for lbl, _, _, w, h, c in dets)
-            else:
-                raw_str = "sin detección"
-            self.get_logger().info(f"[DIAG] frame={diag_count}  {raw_str}")
-            # --- FIN DIAGNÓSTICO ---
-
-            # separar detecciones de semáforo (Red/Yellow/Green-Light) del
-            # resto de señales — el modelo único detecta ambas categorías,
-            # pero el semáforo suele verse mucho más pequeño que las señales
-            # así que cada categoría usa su propio umbral de área mínima
+            # Split traffic-light dets from sign dets — the single model detects
+            # both, but lights look much smaller, so each uses its own min area
             traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS
                             and d[3] * d[4] >= self._min_traffic_area]
             sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS
                             and d[3] * d[4] >= self._min_area]
 
-            # tomar la detección de mayor área si hay varias
+            # take the largest-area detection if there are several
             raw_cmd = max(sign_dets, key=lambda d: d[3] * d[4])[0] if sign_dets else "none"
 
-            # debounce: confirmar tras DEBOUNCE_FRAMES frames consecutivos
+            # debounce: confirm after DEBOUNCE_FRAMES consecutive frames
             if raw_cmd == self._pending_cmd:
                 self._pending_count += 1
             else:
@@ -297,7 +281,7 @@ class SignDetectorNode(Node):
             if self._pending_count >= DEBOUNCE_FRAMES:
                 command = self._pending_cmd
             else:
-                command = self._confirmed_cmd  # mantener el último confirmado
+                command = self._confirmed_cmd  # keep last confirmed
 
             if command != self._confirmed_cmd:
                 self._confirmed_cmd = command
@@ -309,7 +293,7 @@ class SignDetectorNode(Node):
                 else:
                     self.get_logger().info("DETECTED: NONE")
 
-            # debounce del semáforo (mismo esquema, salida red|yellow|green|none)
+            # traffic-light debounce (same scheme, output red|yellow|green|none)
             raw_traffic = "none"
             if traffic_dets:
                 best_traffic = max(traffic_dets, key=lambda d: d[3] * d[4])

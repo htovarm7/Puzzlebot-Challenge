@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Publica frames de la PiCam CSI (IMX219) en /camera/image_raw.
+"""Publish CSI PiCam (IMX219) frames on /camera/image_raw.
 
-Usa GStreamer Python (gi) en lugar de cv2.VideoCapture porque el OpenCV
-del Jetson fue compilado sin soporte GStreamer.
+Uses GStreamer Python (gi) instead of cv2.VideoCapture because the Jetson's
+OpenCV was built without GStreamer support.
 """
 
 import os
@@ -61,11 +61,11 @@ class PiCamPublisher(Node):
             self._out_w, self._out_h,
         )
 
-        self.get_logger().info("Abriendo PiCam (gi/GStreamer)...")
+        self.get_logger().info("Opening PiCam (gi/GStreamer)...")
 
         self._pipeline = Gst.parse_launch(pipeline_str)
         if self._pipeline is None:
-            self.get_logger().error("No se pudo parsear el pipeline GStreamer.")
+            self.get_logger().error("Failed to parse GStreamer pipeline.")
             raise SystemExit(1)
 
         self._appsink = self._pipeline.get_by_name('sink')
@@ -73,7 +73,7 @@ class PiCamPublisher(Node):
 
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
-            self.get_logger().error("No se pudo iniciar el pipeline GStreamer.")
+            self.get_logger().error("Failed to start GStreamer pipeline.")
             raise SystemExit(1)
 
         self._latest_frame = None
@@ -84,11 +84,11 @@ class PiCamPublisher(Node):
         self.timer  = self.create_timer(1.0 / float(p('pub_fps').value), self._tick)
 
         self.get_logger().info(
-            f"Publicando en {p('topic').value} "
+            f"Publishing on {p('topic').value} "
             f"({self._out_w}x{self._out_h} @ {p('pub_fps').value} Hz)"
         )
 
-    # ── GStreamer callback (hilo de GStreamer) ────────────────────────────
+    # GStreamer thread callback
     def _on_new_sample(self, sink):
         sample = sink.emit('pull-sample')
         if sample is None:
@@ -105,7 +105,7 @@ class PiCamPublisher(Node):
         buf.unmap(mapinfo)
         return Gst.FlowReturn.OK
 
-    # ── Timer ROS2 (hilo de rclpy) ───────────────────────────────────────
+    # ROS2 timer (rclpy thread)
     def _tick(self):
         with self._lock:
             frame = self._latest_frame

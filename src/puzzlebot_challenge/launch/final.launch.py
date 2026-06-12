@@ -1,36 +1,12 @@
-"""
-final.launch.py
-===============
-Launch final para el desafío completo.
+"""Full challenge launch (Jetson).
 
-Nodos (Jetson):
-  1. picam_publisher          – driver cámara CSI
-  2. line_detector            – /line/shift, /line/angle, /line/detected
-  3. line_follower            – control PD de línea
-                                 ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
-  4. sign_behavior_controller – intercepta velocidades del line_follower
-                                 y aplica comportamientos por señal:
-                                   give_way       → sigue línea, para 2 s al perder la señal
-                                   stop           → para mientras esté visible + hold
-                                   workers_ahead  → reduce velocidad a WORKERS_FACTOR
-                                   turn_left      → al perder la señal, gira izquierda
-                                   turn_right     → al perder la señal, gira derecha
-                                   go_straight    → sigue recto al perder la señal
-                                 ↳ publica → /VelocitySetL, /VelocitySetR
-  5. motor_watchdog           – para motores si no llegan comandos
+Nodes: picam_publisher, line_detector, line_follower, sign_behavior_controller.
+sign_detector (YOLO) runs in a separate terminal so inference is not restarted
+with this launch; it publishes /sign/command and /traffic_light.
 
-NOTA: sign_detector (YOLO) se corre por separado en otra terminal de la Jetson
-      (ros2 run puzzlebot_challenge sign_detector), dejándolo siempre corriendo
-      para no tener que reiniciar la inferencia si se mata este launch.
-      El mismo modelo detecta señales y semáforo (Red/Yellow/Green-Light),
-      publicando /sign/command y /traffic_light (red|yellow|green|none).
+Control priority: traffic_light (red/yellow) > sign behavior > line following.
 
-Prioridad de control:
-  1° /traffic_light  red/yellow → stop  (en sign_behavior_controller)
-  2° sign_behavior_controller   → acción por señal
-  3° /line/*                    → seguimiento de línea PD
-
-Uso:
+Usage:
   ros2 launch puzzlebot_challenge final.launch.py
   ros2 launch puzzlebot_challenge final.launch.py v_base:=0.12
 """
@@ -48,27 +24,24 @@ def generate_launch_description():
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
 
-    # ── Argumentos ──────────────────────────────────────────────────────────────
     args = [
         # Line follower
         DeclareLaunchArgument('kp',             default_value='0.3',  description='P gain'),
         DeclareLaunchArgument('kd',             default_value='0.08', description='D gain'),
-        DeclareLaunchArgument('ka',             default_value='0.2',  description='Peso corrección ángulo'),
-        DeclareLaunchArgument('v_base',         default_value='0.1', description='Velocidad base [m/s]'),
-        DeclareLaunchArgument('crossing_time',  default_value='3.0',  description='Segundos en intersección recto [s]'),
-        DeclareLaunchArgument('cooldown_time',  default_value='3.0',  description='Cooldown entre intersecciones [s]'),
+        DeclareLaunchArgument('ka',             default_value='0.2',  description='Angle correction weight'),
+        DeclareLaunchArgument('v_base',         default_value='0.1',  description='Base speed [m/s]'),
         # Sign behaviors
-        DeclareLaunchArgument('give_way_time',  default_value='2.0',  description='Parada give_way [s]'),
-        DeclareLaunchArgument('stop_hold_time', default_value='1.0',  description='Hold tras desaparecer stop [s]'),
-        DeclareLaunchArgument('workers_factor', default_value='0.5',  description='Factor velocidad workers'),
-        DeclareLaunchArgument('approach_time',  default_value='0.4',  description='Tramo recto antes del giro [s]'),
-        DeclareLaunchArgument('turn_time',      default_value='1.8',  description='Duración del giro [s]'),
-        DeclareLaunchArgument('turn_omega',     default_value='0.7',  description='Velocidad angular giro [rad/s]'),
-        DeclareLaunchArgument('turn_v',         default_value='0.06', description='Velocidad lineal durante giro [m/s]'),
-        DeclareLaunchArgument('straight_time',  default_value='4.0',  description='Duración go_straight override [s]'),
-        DeclareLaunchArgument('straight_v',     default_value='0.12', description='Velocidad go_straight [m/s]'),
-        DeclareLaunchArgument('sign_cooldown',  default_value='1.0',  description='Cooldown entre señales iguales [s]'),
-        DeclareLaunchArgument('wait_for_start', default_value='true', description='Esperar /robot/start antes de mover'),
+        DeclareLaunchArgument('give_way_time',  default_value='2.0',  description='give_way stop [s]'),
+        DeclareLaunchArgument('stop_hold_time', default_value='1.0',  description='Hold after stop sign disappears [s]'),
+        DeclareLaunchArgument('workers_factor', default_value='0.5',  description='Workers speed factor'),
+        DeclareLaunchArgument('approach_time',  default_value='0.4',  description='Straight run before turn [s]'),
+        DeclareLaunchArgument('turn_time',      default_value='1.8',  description='Turn duration [s]'),
+        DeclareLaunchArgument('turn_omega',     default_value='0.7',  description='Turn angular speed [rad/s]'),
+        DeclareLaunchArgument('turn_v',         default_value='0.06', description='Turn linear speed [m/s]'),
+        DeclareLaunchArgument('straight_time',  default_value='4.0',  description='go_straight override duration [s]'),
+        DeclareLaunchArgument('straight_v',     default_value='0.12', description='go_straight speed [m/s]'),
+        DeclareLaunchArgument('sign_cooldown',  default_value='1.0',  description='Cooldown between equal signs [s]'),
+        DeclareLaunchArgument('wait_for_start', default_value='true', description='Wait for /robot/start before moving'),
     ]
 
     picam = Node(
@@ -92,12 +65,10 @@ def generate_launch_description():
         executable='line_follower',
         name='line_follower',
         parameters=[{
-            'kp':            LaunchConfiguration('kp'),
-            'kd':            LaunchConfiguration('kd'),
-            'ka':            LaunchConfiguration('ka'),
-            'v_base':        LaunchConfiguration('v_base'),
-            'crossing_time': LaunchConfiguration('crossing_time'),
-            'cooldown_time': LaunchConfiguration('cooldown_time'),
+            'kp':     LaunchConfiguration('kp'),
+            'kd':     LaunchConfiguration('kd'),
+            'ka':     LaunchConfiguration('ka'),
+            'v_base': LaunchConfiguration('v_base'),
         }],
         remappings=[
             ('/VelocitySetL', '/line/VelocitySetL'),
