@@ -149,7 +149,7 @@ def generate_launch_description():
         env_actions.append(SetEnvironmentVariable('LD_PRELOAD', libgomp))
         env_actions.append(LogInfo(msg=f'[signs.launch] LD_PRELOAD={libgomp}'))
     else:
-        env_actions.append(LogInfo(msg='[signs.launch] WARN: libgomp not found — torch may fail under ROS2'))
+        env_actions.append(LogInfo(msg='[signs.launch] WARN: libgomp not found, torch may fail under ROS2'))
 
     return LaunchDescription(env_actions + args + [
         picam,

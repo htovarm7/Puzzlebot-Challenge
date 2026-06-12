@@ -3,7 +3,6 @@
 
 Run once on the Jetson before launching sign_detector:
   python3 export_trt.py
-  python3 export_trt.py --pt /path/to/best.pt --imgsz 320
 
 The resulting best.engine lives next to best.pt and is auto-loaded by
 sign_detector.py when present.

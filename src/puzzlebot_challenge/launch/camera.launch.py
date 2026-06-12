@@ -1,4 +1,4 @@
-"""Lanza el publisher de la PiCam CSI y el servidor MJPEG."""
+"""Launch the CSI PiCam publisher and the MJPEG server."""
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
