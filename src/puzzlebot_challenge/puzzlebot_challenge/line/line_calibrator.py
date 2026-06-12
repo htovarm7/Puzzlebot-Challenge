@@ -1,26 +1,20 @@
 #!/usr/bin/env python3
-"""
-line_calibrator.py
+"""Interactive parameter tuner for the contour-based line detector.
 
-Interactive parameter tuner for the CONTOUR-based line detector. The detection
-math here mirrors `puzzlebot_challenge.line.line_detector.LineDetection` exactly,
-so what you tune in this window is what the running node will do:
+The detection math mirrors line_detector.LineDetection, so what you tune here
+is what the running node will do. It saves only the keys the node consumes
+into line_params.yaml.
 
-  * both threshold modes:  global balanced (T_*) and local adaptive (adapt_*)
-  * keeps the N largest blobs, then picks the contour whose centroid is
-    CLOSEST TO THE HORIZONTAL CENTRE  (not the median) — same as the node
-  * saves only the keys the node consumes, into line_params.yaml
-
-Three input modes:
-  --live              Subscribe to /camera/image_raw (ROS2)          <- preferred
-  --image PATH        Static image / video file
-  (no flag)           Open default webcam (cv.VideoCapture(0))
+Input modes:
+  --live              Subscribe to /camera/image_raw (ROS2)
+  --image PATH        Static image or video file
+  (no flag)           Open default webcam
 
 Keys:
   q       quit
-  s       save params to line_params.yaml (format consumed by line_detector)
+  s       save params to line_params.yaml
   r       reset trackbars to defaults
-  space   pause / unpause (no effect in live mode — frames always flow)
+  space   pause / unpause (no effect in live mode)
 
 Usage:
   ros2 run puzzlebot_challenge line_calibrator --live
@@ -39,7 +33,7 @@ import numpy as np
 import yaml
 
 
-# ─── Defaults (match line_detector._DEFAULT_PARAMS) ──────────────────────────
+# Defaults (match line_detector._DEFAULT_PARAMS)
 DEFAULTS = {
     "T_init":        185,
     "T_min":         127,
@@ -52,15 +46,15 @@ DEFAULTS = {
     "morph":         9,
     "n_track_lines": 3,
     "adaptive":      0,     # 0 = global balanced, 1 = local adaptive
-    "adapt_block":   61,    # neighborhood size (odd) — larger = smoother
+    "adapt_block":   61,    # neighborhood size (odd), larger is smoother
     "adapt_c":       12,    # line must be this many units darker than local mean
-    # follower-side display only (NOT saved to the node YAML)
+    # follower-side display only (not saved to the node YAML)
     "turn_angle":    36,
     "shift_max":     130,
 }
 
 
-# ─── Windows ─────────────────────────────────────────────────────────────────
+# Windows
 WIN_CTRL  = "Controls"
 WIN_DEBUG = "Debug"
 WIN_BIN   = "Binary (ROI)"
@@ -70,7 +64,7 @@ def nothing(_):
     pass
 
 
-# ─── YAML load (back into trackbar units) ────────────────────────────────────
+# YAML load (back into trackbar units)
 def _load_saved(yaml_path: Path) -> dict:
     init = dict(DEFAULTS)
     if not yaml_path or not yaml_path.exists():
@@ -193,14 +187,13 @@ def save_params(p: dict, out_path: Path):
     print(f"[saved] {out_path.resolve()}")
 
 
-# ─── Detection (mirrors line_detector.LineDetection.detect) ──────────────────
-# Persistent global threshold state, exactly like the node carries _T_state
-# across frames in balanced mode.
+# Detection (mirrors line_detector.LineDetection.detect)
+# Persistent global threshold state, like the node carries _T_state across frames.
 _T_state = DEFAULTS["T_init"]
 
 
 def _balance(gray, p, y_off):
-    """Global balanced threshold — mirror of LineDetection._balance."""
+    """Global balanced threshold, mirror of LineDetection._balance."""
     global _T_state
     T = _T_state
     direction = 0
@@ -232,8 +225,7 @@ def _balance(gray, p, y_off):
 
 
 def _adaptive(gray, p, y_off):
-    """Local adaptive threshold — mirror of LineDetection._adaptive_roi
-    (ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY_INV)."""
+    """Local adaptive threshold, mirror of LineDetection._adaptive_roi."""
     block = int(p["adapt_block"]) | 1
     C     = int(p["adapt_c"])
     binary = cv.adaptiveThreshold(
@@ -263,7 +255,7 @@ def detect(frame, p):
                        cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             return debug, np.zeros((100, 300), np.uint8), None, None, T_used
 
-    # Morphology — OPEN then CLOSE, same order as the node
+    # Morphology: OPEN then CLOSE, same order as the node
     k = int(p["morph"])
     if k >= 2:
         kernel = np.ones((k, k), np.uint8)
@@ -277,7 +269,7 @@ def detect(frame, p):
     angle = shift = None
     if contours:
         # Keep the N largest blobs, then pick the contour whose centroid is
-        # CLOSEST TO THE HORIZONTAL CENTRE — identical to the node.
+        # closest to the horizontal centre, identical to the node.
         n_lines = int(p["n_track_lines"])
         if len(contours) > n_lines:
             contours = sorted(contours, key=cv.contourArea, reverse=True)[:n_lines]
@@ -327,7 +319,7 @@ def detect(frame, p):
     return debug, binary_roi, angle, shift, T_used
 
 
-# ─── Frame source: file / webcam ─────────────────────────────────────────────
+# Frame source: file / webcam
 def open_source_file(arg):
     """Static image, video file, or webcam (arg=None)."""
     if arg is None:
@@ -350,7 +342,7 @@ def open_source_file(arg):
     return (lambda: cap.read()[1]), False, cap
 
 
-# ─── Frame source: live ROS2 topic ───────────────────────────────────────────
+# Frame source: live ROS2 topic
 class _LiveFrameBuffer:
     """ROS callback writes, UI reads."""
 
@@ -399,7 +391,7 @@ def run_live(buf: _LiveFrameBuffer, topic: str, out_path: Path):
             rclpy.shutdown()
 
 
-# ─── Shared UI loop ──────────────────────────────────────────────────────────
+# Shared UI loop
 def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool):
     cv.namedWindow(WIN_DEBUG, cv.WINDOW_NORMAL)
     cv.namedWindow(WIN_BIN,   cv.WINDOW_NORMAL)
@@ -421,7 +413,7 @@ def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool)
                 if frame is None:
                     if is_image:
                         break
-                    if pump_or_cap is not None:   # video — loop it
+                    if pump_or_cap is not None:   # video, loop it
                         pump_or_cap.set(cv.CAP_PROP_POS_FRAMES, 0)
                         continue
                     break
@@ -452,7 +444,7 @@ def _ui_loop(source, pump_or_cap, out_path: Path, is_image: bool, is_live: bool)
             paused = not paused
 
 
-# ─── Entry point ─────────────────────────────────────────────────────────────
+# Entry point
 def main():
     default_yaml = _resolve_default_yaml()
 

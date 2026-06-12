@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""
-test_model_picam.py — Corre el modelo YOLO de señales (.onnx) en vivo sobre
-el feed de la PiCam (/camera/image_raw) y reporta por frame la clase
-detectada, la confianza y el tamaño del bounding box (w x h, área).
+"""Run the YOLO sign model (.onnx) live on the PiCam feed.
 
-Sirve para validar el modelo exportado a ONNX directamente con la cámara
-real, sin pasar por sign_detector.
+Reads /camera/image_raw and reports, per frame, the detected class, confidence
+and bounding box size. Useful to validate the ONNX model with the real camera
+without going through sign_detector.
 
-Uso:
-    ros2 run puzzlebot_challenge picam_publisher    # si no está corriendo
+Usage:
+    ros2 run puzzlebot_challenge picam_publisher
     python3 scripts/test_model_picam.py
-    python3 scripts/test_model_picam.py --model ruta/a/best.onnx --conf 0.7
+    python3 scripts/test_model_picam.py 
 
-Controles (con ventana de preview):
-    q / ESC  — salir
+Controls: q / ESC to quit.
 """
 
 import argparse
@@ -32,21 +29,21 @@ DEFAULT_MODEL = os.path.join(HERE, "..", "src", "puzzlebot_challenge",
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Prueba en vivo del modelo ONNX con la PiCam")
+    p = argparse.ArgumentParser(description="Live test of the ONNX model with the PiCam")
     p.add_argument("--topic", default="/camera/image_raw",
-                   help="Topic de imagen a usar (default: /camera/image_raw)")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Ruta al modelo .onnx")
-    p.add_argument("--conf",  type=float, default=0.7, help="Umbral de confianza")
-    p.add_argument("--imgsz", type=int,   default=320, help="Tamaño de inferencia")
+                   help="Image topic to use (default: /camera/image_raw)")
+    p.add_argument("--model", default=DEFAULT_MODEL, help="Path to the .onnx model")
+    p.add_argument("--conf",  type=float, default=0.7, help="Confidence threshold")
+    p.add_argument("--imgsz", type=int,   default=320, help="Inference image size")
     p.add_argument("--no-show", dest="show", action="store_false",
-                   help="No mostrar ventana, solo imprimir resultados")
+                   help="Do not show a window, just print results")
     p.set_defaults(show=True)
     return p.parse_args(rclpy.utilities.remove_ros_args(sys.argv)[1:])
 
 
 def load_model(model_path):
     if not os.path.exists(model_path):
-        print(f"ERROR: modelo no encontrado: {model_path}")
+        print(f"ERROR: model not found: {model_path}")
         sys.exit(1)
     from ultralytics import YOLO
     return YOLO(model_path, task="detect")
@@ -80,7 +77,7 @@ class PicamFeed(Node):
         self.bridge = CvBridge()
         self.frame  = None
         self.create_subscription(Image, topic, self._on_image, 10)
-        self.get_logger().info(f"Esperando frames en {topic}...")
+        self.get_logger().info(f"Waiting for frames on {topic}...")
 
     def _on_image(self, msg):
         self.frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -90,12 +87,12 @@ def main():
     rclpy.init()
     args = parse_args()
 
-    print(f"Cargando modelo: {args.model}")
+    print(f"Loading model: {args.model}")
     model = load_model(args.model)
 
     node = PicamFeed(args.topic)
 
-    win = "test_model_picam  |  q/ESC = salir"
+    win = "test_model_picam  |  q/ESC = quit"
     if args.show:
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
@@ -115,7 +112,7 @@ def main():
                     print(f"frame {frame_idx:5d} | {label:14s} "
                           f"conf={conf:.2f}  bbox={w}x{h}  area={w*h}px")
             else:
-                print(f"frame {frame_idx:5d} | sin detección")
+                print(f"frame {frame_idx:5d} | no detection")
 
             if args.show:
                 cv2.imshow(win, draw(frame, dets))

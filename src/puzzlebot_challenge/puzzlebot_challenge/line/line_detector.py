@@ -34,15 +34,15 @@ _DEFAULT_PARAMS = {
     "blur":        21,
     "morph":       9,
     "n_track_lines": 3,
-    # Adaptive local threshold mode (1 = on, 0 = global). Needs only adapt_block/adapt_c.
+    # Adaptive local threshold mode (1 = on, 0 = global)
     "adaptive":      0,
-    "adapt_block":  61,   # neighborhood size (odd, pixels) — larger = smoother
+    "adapt_block":  61,   # neighborhood size (odd, pixels), larger is smoother
     "adapt_c":      12,   # line must be this many units darker than local mean
 }
 
 
 def _load_params_yaml(path: str) -> dict | None:
-    """Read a YAML file saved by the tuner. Returns None if the file does not exist or fails to load."""
+    """Read a YAML file saved by the tuner. Returns None if missing or invalid."""
     if not path:
         return None
     p = Path(path)
@@ -119,17 +119,7 @@ class LineDetection:
         return None, T, y_off
 
     def detect(self, frame_bgr: np.ndarray) -> dict:
-        """
-        Returns a dict with:
-          detected : bool
-          shift    : float  (px from the horizontal center; + = right, - = left)
-          angle    : float  (deg, 0..180, 90 = vertical)
-          T_used   : int    (threshold finally applied)
-          y_off    : int    (top line of the ROI, for overlay)
-          contour  : np.ndarray | None  (contour already translated to global coords)
-          box      : np.ndarray | None  (oriented box in global coords, 4 corners)
-          top_mid, bottom_mid : tuple (x,y) in global coords for overlay
-        """
+        """Detect the line and return shift, angle, detected flag and overlay data."""
         out: dict = {
             "detected":     False,
             "shift":        0.0,
@@ -175,14 +165,12 @@ class LineDetection:
         if not contours:
             return out
 
-        # Keep only the N largest blobs — floor artifacts are always smaller than tape
+        # Keep only the N largest blobs; floor artifacts are smaller than tape
         n_lines = int(p.get("n_track_lines", 3))
         if len(contours) > n_lines:
             contours = sorted(contours, key=cv2.contourArea, reverse=True)[:n_lines]
 
-        # Pick the contour whose centroid is closest to the frame's horizontal centre.
-        # This is more robust than the median when one large off-centre blob
-        # (e.g. a nearby road boundary) skews the sorted order.
+        # Pick the contour whose centroid is closest to the frame's horizontal centre
         def _cx(c):
             m = cv2.moments(c)
             return int(m["m10"] / m["m00"]) if m["m00"] else 0
@@ -203,7 +191,6 @@ class LineDetection:
         if angle < 0:
             angle += 180.0
 
-        roi_center_x = binary_roi.shape[1] // 2
         shift = float(cx - roi_center_x)
 
         contour_global = line + np.array([[0, y_off]])

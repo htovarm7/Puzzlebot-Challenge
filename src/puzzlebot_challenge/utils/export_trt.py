@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-export_trt.py — Converts best.pt → best.engine (TensorRT FP16) for Jetson Nano.
+"""Convert best.pt into best.engine (TensorRT FP16) for Jetson Nano.
 
 Run once on the Jetson before launching sign_detector:
   python3 export_trt.py
@@ -18,7 +17,7 @@ import os
 import sys
 import time
 
-# Must preload before tensorrt is imported — same fix as sign_detector.py
+# Must preload before tensorrt is imported, same fix as sign_detector.py
 for _lib in (
     '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
     '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
@@ -34,7 +33,7 @@ def parse_args():
     here = os.path.dirname(os.path.abspath(__file__))
     default_pt = os.path.join(here, "best.pt")
 
-    p = argparse.ArgumentParser(description="Export YOLOv8 → TensorRT engine")
+    p = argparse.ArgumentParser(description="Export YOLOv8 to a TensorRT engine")
     p.add_argument("--pt",     default=default_pt, help="Path to best.pt")
     p.add_argument("--imgsz",  type=int, default=320, help="Inference image size")
     p.add_argument("--batch",  type=int, default=1,   help="Batch size (keep 1 for real-time)")
@@ -77,7 +76,7 @@ def main():
 
     print(f"\nExporting {args.pt}")
     print(f"  imgsz={args.imgsz}  batch={args.batch}  fp16={args.fp16}")
-    print("This can take 5-10 minutes on Jetson Nano — please wait...\n")
+    print("This can take 5-10 minutes on Jetson Nano, please wait...\n")
 
     model = YOLO(args.pt)
     t0 = time.time()
@@ -87,14 +86,14 @@ def main():
         half=args.fp16,
         batch=args.batch,
         device=0,
-        workspace=2,   # GB — Jetson Nano has 4 GB shared; keep workspace small
+        workspace=2,   # GB, Jetson Nano has 4 GB shared so keep this small
         verbose=True,
     )
     elapsed = time.time() - t0
 
     if os.path.exists(engine_path):
         size_mb = os.path.getsize(engine_path) / 1e6
-        print(f"\nDone in {elapsed:.0f}s — {engine_path} ({size_mb:.1f} MB)")
+        print(f"\nDone in {elapsed:.0f}s: {engine_path} ({size_mb:.1f} MB)")
         print("sign_detector.py will auto-load this engine on next launch.")
     else:
         print("\nERROR: export finished but .engine file not found.")

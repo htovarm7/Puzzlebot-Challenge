@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Traffic sign detector (YOLO).
 
-Pub:
-  /sign/command   (std_msgs/String)   — stop | go_straight | turn_left | turn_right | workers | none
-  /sign/detected  (std_msgs/Bool)     — True if a sign is active
-  /traffic_light  (std_msgs/String)   — red | yellow | green | none
-  /vision/signs   (sensor_msgs/Image) — annotated frame
+Publishes:
+  /sign/command   (String)  stop | go_straight | turn_left | turn_right | workers | none
+  /sign/detected  (Bool)    True if a sign is active
+  /traffic_light  (String)  red | yellow | green | none
+  /vision/signs   (Image)   annotated frame
 """
 
 import ctypes
@@ -52,10 +52,10 @@ def _get_model(model_path: str):
     elif os.path.exists(onnx_path):
         load_path = onnx_path
     else:
-        print(f"[sign_detector] ERROR: no .engine or .onnx found at {base} — YOLO disabled", flush=True)
+        print(f"[sign_detector] ERROR: no .engine or .onnx found at {base}, YOLO disabled", flush=True)
         return None
     try:
-        import sys, traceback, torch
+        import torch
         from ultralytics import YOLO
         # ultralytics + TRT print to stdout/stderr during YOLO() construction
         _dn = os.open(os.devnull, os.O_WRONLY)
@@ -67,7 +67,7 @@ def _get_model(model_path: str):
             os.dup2(_o1, 1); os.dup2(_o2, 2)
             os.close(_o1); os.close(_o2); os.close(_dn)
         _INFER_HALF = torch.cuda.is_available()
-        print(f"[sign_detector] model loaded — CUDA={_INFER_HALF}  path={load_path}", flush=True)
+        print(f"[sign_detector] model loaded, CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
         import sys, traceback
         print(f"[sign_detector] ERROR loading YOLO: {e}", flush=True)
@@ -121,7 +121,7 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
 
 DEBOUNCE_FRAMES = 2   # consecutive frames to confirm a detection
 
-# Traffic-light classes within the same YOLO model → /traffic_light state
+# Traffic-light classes within the same YOLO model
 TRAFFIC_LIGHT_LABELS = {
     "red_light":    "red",
     "yellow_light": "yellow",
@@ -239,7 +239,7 @@ class SignDetectorNode(Node):
 
             now = time.monotonic()
             if now - last_time < min_dt:
-                continue  # frame too recent — drop it, wait for the next
+                continue  # frame too recent, drop it
 
             with self._infer_lock:
                 frame = self._infer_frame
@@ -261,8 +261,7 @@ class SignDetectorNode(Node):
             dets = [d for d in dets if d[5] >= (
                 self._yellow_conf if d[0] == "yellow_light" else self._conf)]
 
-            # Split traffic-light dets from sign dets — the single model detects
-            # both, but lights look much smaller, so each uses its own min area
+            # Lights look much smaller than signs, so each uses its own min area
             traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS
                             and d[3] * d[4] >= self._min_traffic_area]
             sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS
@@ -329,9 +328,6 @@ class SignDetectorNode(Node):
         out_msg = self._bridge.cv2_to_imgmsg(vis, encoding="bgr8")
         out_msg.header.stamp = self.get_clock().now().to_msg()
         self.pub_debug.publish(out_msg)
-
-    def destroy_node(self):
-        super().destroy_node()
 
 
 def main(args=None):

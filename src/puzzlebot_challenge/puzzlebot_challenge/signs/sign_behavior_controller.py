@@ -2,25 +2,7 @@
 """Sign behavior controller.
 
 Intercepts line_follower wheel speeds and applies behaviors based on the
-traffic signs detected by YOLO. Turns are timer-triggered (no intersection
-detector): when a turn/straight sign is detected the robot keeps following the
-line for arm_delay seconds, then runs the hardcoded maneuver regardless of the
-line state. If the line is lost during the count it drives straight so it does
-not stop.
-
-Topics:
-  line_follower  → /line/VelocitySetL, /line/VelocitySetR   (remapped in launch)
-  line_detector  → /line/detected
-  sign_detector  → /sign/command, /sign/detected
-  this node      → /VelocitySetL, /VelocitySetR              (final output)
-
-Behaviors:
-  give_way    → follow line while sign visible; on loss stop 2 s and continue
-  stop        → stop while sign visible + STOP_HOLD_TIME s after
-  workers     → reduce speed to WORKERS_FACTOR while sign visible
-  turn_left   → arm_delay s after detection, turn left
-  turn_right  → arm_delay s after detection, turn right
-  go_straight → arm_delay s after detection, drive straight
+traffic signs detected by YOLO. Turns are timer-triggered.
 """
 
 import rclpy
@@ -33,23 +15,23 @@ WHEEL_BASE   = 0.19
 FORWARD_SIGN = -1   # positive wheel speed = forward
 
 # Default parameters
-GIVE_WAY_STOP_TIME = 2.0   # s — give_way stop duration
-STOP_HOLD_TIME     = 1.0   # s — extra wait after stop sign disappears
+GIVE_WAY_STOP_TIME = 2.0   # give_way stop duration [s]
+STOP_HOLD_TIME     = 1.0   # extra wait after stop sign disappears [s]
 WORKERS_FACTOR     = 0.5   # speed factor under workers sign
-APPROACH_TIME      = 0.4   # s — straight run before turn
-TURN_TIME          = 4.0   # s — turn duration
-TURN_OMEGA         = 0.7   # rad/s — turn angular speed
-TURN_V             = 0.06  # m/s — linear speed during turn
-STRAIGHT_TIME      = 3.0   # s — go_straight override duration
-STRAIGHT_V         = 0.12  # m/s — go_straight override speed
-SIGN_COOLDOWN      = 4.0   # s — cooldown before re-triggering the same command
-ARM_DELAY          = 2.0   # s — wait after detection before running the maneuver
-CTRL_DT            = 0.05  # s — control loop period (20 Hz)
+APPROACH_TIME      = 0.4   # straight run before turn [s]
+TURN_TIME          = 4.0   # turn duration [s]
+TURN_OMEGA         = 0.7   # turn angular speed [rad/s]
+TURN_V             = 0.06  # linear speed during turn [m/s]
+STRAIGHT_TIME      = 3.0   # go_straight override duration [s]
+STRAIGHT_V         = 0.12  # go_straight override speed [m/s]
+SIGN_COOLDOWN      = 4.0   # cooldown before re-triggering the same command [s]
+ARM_DELAY          = 2.0   # wait after detection before running the maneuver [s]
+CTRL_DT            = 0.05  # control loop period [s]
 
 # State ids
 S_IDLE              = "IDLE"
-S_PENDING_GIVE_WAY  = "PENDING_GIVE_WAY"   # follow line while sign visible
-S_GIVE_WAY          = "GIVE_WAY"           # stop 2 s after losing sign
+S_PENDING_GIVE_WAY  = "PENDING_GIVE_WAY"
+S_GIVE_WAY          = "GIVE_WAY"
 S_STOP              = "STOP"
 S_STOP_HOLD         = "STOP_HOLD"
 S_WORKERS           = "WORKERS"
@@ -107,16 +89,14 @@ class SignBehaviorController(Node):
         self._line_detected = False
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
-        self._last_trigger  = {}     # cmd → last trigger timestamp
+        self._last_trigger  = {}     # cmd to last trigger timestamp
 
         _wait = self.get_parameter("wait_for_start").value
         _wait_bool = _wait if isinstance(_wait, bool) else str(_wait).lower() not in ("false", "0", "no")
         self._sign_ready = not _wait_bool
 
         self.create_timer(CTRL_DT, self._control_loop)
-        self.get_logger().info(
-            "SignBehaviorController ready — maneuver triggers arm_delay s after "
-            "detecting the sign (ignores line state)")
+        self.get_logger().info("SignBehaviorController ready")
 
     # Callbacks
 
@@ -200,12 +180,12 @@ class SignBehaviorController(Node):
             self._stop()
             return
 
-        # Top priority: red light → stop
+        # Top priority: red light stops the robot
         if self._traffic_state == "red":
             self._stop()
             return
 
-        # Yellow light → reduce speed
+        # Yellow light reduces speed
         if self._traffic_state == "yellow":
             wk_fact = self.get_parameter("workers_factor").value
             self._publish(self._line_vel_l * wk_fact,
@@ -216,8 +196,8 @@ class SignBehaviorController(Node):
         cmd      = self._sign_command
         detected = self._sign_detected
 
-        rising  = detected and not self._prev_detected   # sign appears
-        falling = not detected and self._prev_detected   # sign disappears
+        rising  = detected and not self._prev_detected
+        falling = not detected and self._prev_detected
         self._prev_detected = detected
 
         p = self.get_parameter
@@ -236,7 +216,7 @@ class SignBehaviorController(Node):
         if self._state == S_IDLE:
             if rising and not self._in_cooldown(cmd):
                 if cmd == "give_way":
-                    self._enter(S_PENDING_GIVE_WAY, cmd)   # approach first
+                    self._enter(S_PENDING_GIVE_WAY, cmd)
                 elif cmd == "stop":
                     self._enter(S_STOP, cmd)
                 elif cmd == "workers":
@@ -252,7 +232,7 @@ class SignBehaviorController(Node):
         # PENDING_GIVE_WAY: follow line while sign visible
         elif self._state == S_PENDING_GIVE_WAY:
             if falling:
-                self._enter(S_GIVE_WAY)   # sign lost → stop 2 s
+                self._enter(S_GIVE_WAY)
             else:
                 self._passthrough()
 
@@ -286,9 +266,7 @@ class SignBehaviorController(Node):
                 self._enter(S_IDLE)
                 self._passthrough()
 
-        # PENDING_*: timer. Follow the line normally; after arm_delay s run the
-        #    maneuver regardless of line state. If the line is lost during the
-        #    count, drive straight instead of stopping.
+        # PENDING_*: follow the line until arm_delay, then run the maneuver
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
             if elapsed >= arm_delay:
                 if self._state == S_PENDING_LEFT:
@@ -298,7 +276,7 @@ class SignBehaviorController(Node):
                 else:
                     self._enter(S_GOING_STRAIGHT)
             elif self._line_detected:
-                self._passthrough()                       # follow line during count
+                self._passthrough()
             else:
                 # line lost during count: drive straight, do not stop
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, 0.0)
@@ -322,7 +300,7 @@ class SignBehaviorController(Node):
         # TURNING_LEFT
         elif self._state == S_TURNING_LEFT:
             if elapsed < t_time:
-                omega = FORWARD_SIGN * t_omg          # positive omega = left turn
+                omega = FORWARD_SIGN * t_omg          # positive omega turns left
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, omega)
                 self._publish(vl, vr)
             else:
@@ -331,7 +309,7 @@ class SignBehaviorController(Node):
         # TURNING_RIGHT
         elif self._state == S_TURNING_RIGHT:
             if elapsed < t_time:
-                omega = -(FORWARD_SIGN * t_omg)       # negative omega = right turn
+                omega = -(FORWARD_SIGN * t_omg)       # negative omega turns right
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, omega)
                 self._publish(vl, vr)
             else:

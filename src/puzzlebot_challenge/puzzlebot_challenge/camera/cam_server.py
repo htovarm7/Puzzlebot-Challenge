@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Servidor MJPEG: se suscribe a /camera/image_raw y lo sirve por HTTP.
+"""MJPEG server: subscribes to /camera/image_raw and serves it over HTTP.
 
-Útil para ver el video desde un navegador en otra máquina sin instalar nada,
-y para visualizar overlays generados por otros nodos (la fuente publica al
-tópico, no se vuelve a abrir la cámara)."""
+Useful for viewing the video from a browser on another machine without
+installing anything, and for visualizing overlays produced by other nodes
+(the source publishes to the topic, the camera is not reopened)."""
 
 import threading
 import cv2
@@ -31,7 +31,7 @@ class CamServer(Node):
 
         topic = self.get_parameter('topic').value
         self.create_subscription(Image, topic, self._on_image, 10)
-        self.get_logger().info(f"Subscrito a {topic}")
+        self.get_logger().info(f"Subscribed to {topic}")
 
         host = self.get_parameter('host').value
         port = int(self.get_parameter('port').value)
@@ -41,7 +41,7 @@ class CamServer(Node):
             target=self._run_flask, args=(host, port), daemon=True
         )
         self._server_thread.start()
-        self.get_logger().info(f"MJPEG server en http://{host}:{port}/")
+        self.get_logger().info(f"MJPEG server at http://{host}:{port}/")
 
     def _on_image(self, msg: Image):
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -56,7 +56,7 @@ class CamServer(Node):
             with self._lock:
                 data = self._latest_jpeg
             if data is None:
-                # Espera al primer frame sin tumbar la CPU.
+                # Wait for the first frame without busy-looping the CPU.
                 rclpy.spin_once(self, timeout_sec=0.05)
                 continue
             yield (b'--f\r\nContent-Type: image/jpeg\r\n\r\n' + data + b'\r\n')
@@ -66,7 +66,7 @@ class CamServer(Node):
                         mimetype='multipart/x-mixed-replace; boundary=f')
 
     def _run_flask(self, host: str, port: int):
-        # threaded=True para servir múltiples clientes; debug=False evita el reloader.
+        # threaded=True to serve multiple clients; debug=False avoids the reloader.
         self._app.run(host=host, port=port, threaded=True, debug=False, use_reloader=False)
 
 
@@ -76,7 +76,7 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().warn('Deteniendo cam_server.')
+        node.get_logger().warn('Stopping cam_server.')
     finally:
         node.destroy_node()
         rclpy.shutdown()

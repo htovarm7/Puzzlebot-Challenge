@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""
-motor_watchdog.py
-=================
-Nodo de seguridad para los motores del PuzzleBot.
+"""Safety watchdog for the PuzzleBot motors.
 
-Actúa como puente entre los nodos de control y los motores reales:
-  - Suscribe a /VelocitySetL y /VelocitySetR  (monitorea comandos)
-  - Publica  a /VelocitySetL y /VelocitySetR  (pasa comandos o para motores)
-
-Si no llega ningún comando en WATCHDOG_TIMEOUT segundos, publica cero
-en ambas ruedas. Garantiza que los motores paren aunque el nodo de
-control muera abruptamente.
+Bridges the control nodes and the motors: if no command arrives within
+WATCHDOG_TIMEOUT seconds it publishes zero on both wheels, so the motors stop
+even if the control node dies abruptly.
 """
 
 import time
@@ -18,8 +11,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
 
-WATCHDOG_TIMEOUT = 0.5   # [s] tiempo sin comandos antes de parar motores
-TIMER_HZ         = 20    # frecuencia del chequeo del watchdog
+WATCHDOG_TIMEOUT = 0.5   # [s] time without commands before stopping motors
+TIMER_HZ         = 20    # watchdog check frequency
 
 
 class MotorWatchdogNode(Node):
@@ -40,7 +33,7 @@ class MotorWatchdogNode(Node):
 
         self.create_timer(1.0 / TIMER_HZ, self._watchdog_tick)
         self.get_logger().info(
-            f'MotorWatchdog listo — timeout={WATCHDOG_TIMEOUT}s')
+            f'MotorWatchdog ready, timeout={WATCHDOG_TIMEOUT}s')
 
     def _cb_l(self, msg: Float32):
         self._last_l = msg.data
@@ -58,7 +51,7 @@ class MotorWatchdogNode(Node):
         if elapsed > WATCHDOG_TIMEOUT:
             if not self._timed_out:
                 self.get_logger().warn(
-                    f'Sin comandos por {elapsed:.2f}s — parando motores.')
+                    f'No commands for {elapsed:.2f}s, stopping motors.')
                 self._timed_out = True
             self._publish(0.0, 0.0)
         else:

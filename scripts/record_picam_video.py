@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""
-record_picam_video.py — Graba video de la PiCam leyendo /camera/image_raw,
-a la misma resolución que recibe sign_detector (la que publica picam_publisher,
-640x240 según config/camera.yaml). Al terminar la grabación pide un nombre
-y guarda el video en ~ (home del usuario).
+"""Record PiCam video by reading /camera/image_raw.
 
-Uso:
-    ros2 run puzzlebot_challenge picam_publisher    # si no está corriendo
+Uses the same resolution sign_detector receives. When finished it asks for a
+name and saves the video in the user's home directory.
+
+Usage:
+    ros2 run puzzlebot_challenge picam_publisher
     python3 scripts/record_picam_video.py
-    python3 scripts/record_picam_video.py --topic /camera/image_raw --fps 30
-
-Controles (con ventana de preview):
-    q / ESC  — detener grabación y guardar
+Controls: q / ESC stops recording and saves.
 """
 
 import argparse
@@ -27,11 +23,11 @@ from cv_bridge import CvBridge
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Graba video de la PiCam vía ROS2")
+    p = argparse.ArgumentParser(description="Record PiCam video via ROS2")
     p.add_argument("--topic", default="/camera/image_raw",
-                   help="Topic de imagen a grabar (default: /camera/image_raw)")
+                   help="Image topic to record (default: /camera/image_raw)")
     p.add_argument("--fps", type=float, default=30.0,
-                   help="FPS del archivo de salida (default: 30.0, igual que pub_fps)")
+                   help="Output file FPS (default: 30.0, same as pub_fps)")
     return p.parse_args(rclpy.utilities.remove_ros_args(sys.argv)[1:])
 
 
@@ -45,7 +41,7 @@ class PicamRecorder(Node):
         self.frame    = None
         self.fps      = fps
         self.create_subscription(Image, topic, self._on_image, 10)
-        self.get_logger().info(f"Esperando frames en {topic}...")
+        self.get_logger().info(f"Waiting for frames on {topic}...")
 
     def _on_image(self, msg):
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -54,7 +50,7 @@ class PicamRecorder(Node):
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             self.tmp_path = os.path.join(tempfile.gettempdir(), 'picam_recording.mp4')
             self.writer = cv2.VideoWriter(self.tmp_path, fourcc, self.fps, (w, h))
-            self.get_logger().info(f"Grabando a {w}x{h} @ {self.fps} fps -> {self.tmp_path}")
+            self.get_logger().info(f"Recording at {w}x{h} @ {self.fps} fps to {self.tmp_path}")
         self.writer.write(frame)
         self.frame = frame
 
@@ -64,7 +60,7 @@ def main():
     args = parse_args()
     node = PicamRecorder(args.topic, args.fps)
 
-    win = "Grabando PiCam  |  q/ESC = detener y guardar"
+    win = "Recording PiCam  |  q/ESC = stop and save"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
     try:
@@ -87,10 +83,10 @@ def main():
     rclpy.shutdown()
 
     if tmp_path is None or not os.path.exists(tmp_path):
-        print("No se grabó ningún frame; nada que guardar.")
+        print("No frame was recorded; nothing to save.")
         sys.exit(0)
 
-    name = input("Nombre para guardar el video (sin extensión): ").strip()
+    name = input("Name to save the video (without extension): ").strip()
     if not name:
         name = "picam_recording"
     if not name.lower().endswith('.mp4'):
@@ -98,7 +94,7 @@ def main():
 
     dest = os.path.expanduser(os.path.join('~', name))
     os.replace(tmp_path, dest)
-    print(f"Video guardado en: {dest}")
+    print(f"Video saved to: {dest}")
 
 
 if __name__ == '__main__':

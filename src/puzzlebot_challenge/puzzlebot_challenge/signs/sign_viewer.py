@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""
-sign_viewer.py
-==============
-Muestra en una ventana OpenCV la imagen de debug del sign_detector.
-Requiere display (local o SSH con X11 forwarding: ssh -X).
+"""Show the sign_detector debug image in an OpenCV window.
 
-Suscribe a /vision/signs (sensor_msgs/Image).
+Requires a display (local or SSH with X11 forwarding: ssh -X).
+Subscribes to /vision/signs (sensor_msgs/Image).
 """
 
 import threading
@@ -16,7 +13,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
-WINDOW = 'Sign Detector — Vision'
+WINDOW = 'Sign Detector Vision'
 
 
 class SignViewerNode(Node):
@@ -27,7 +24,7 @@ class SignViewerNode(Node):
         self._frame = None
         self._lock = threading.Lock()
         self.create_subscription(Image, '/vision/signs', self._on_image, 10)
-        self.get_logger().info('SignViewer listo — esperando /vision/signs ...')
+        self.get_logger().info('SignViewer ready, waiting for /vision/signs ...')
 
     def _on_image(self, msg: Image):
         try:
@@ -35,7 +32,7 @@ class SignViewerNode(Node):
             with self._lock:
                 self._frame = frame
         except Exception as e:
-            self.get_logger().warn(f'Error convirtiendo imagen: {e}')
+            self.get_logger().warn(f'Error converting image: {e}')
 
     def get_frame(self):
         with self._lock:
@@ -54,8 +51,8 @@ def main(args=None):
         cv2.resizeWindow(WINDOW, 640, 480)
     except Exception as e:
         node.get_logger().error(
-            f'No hay display disponible: {e}\n'
-            'Usa "ssh -X" para X11 forwarding o desactiva sign_viewer.'
+            f'No display available: {e}\n'
+            'Use "ssh -X" for X11 forwarding or disable sign_viewer.'
         )
         node.destroy_node()
         if rclpy.ok():
@@ -63,7 +60,7 @@ def main(args=None):
         return
 
     placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
-    cv2.putText(placeholder, 'Esperando imagen...', (30, 120),
+    cv2.putText(placeholder, 'Waiting for image...', (30, 120),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
     cv2.imshow(WINDOW, placeholder)
 

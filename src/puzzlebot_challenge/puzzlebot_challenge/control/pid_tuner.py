@@ -1,95 +1,24 @@
 #!/usr/bin/env python3
-"""
-puzzlebot_pid_tuner.py
-======================
-Step-response based PD tuner for the PuzzleBot waypoint controller,
-with built-in odometry diagnostics.
+"""Step-response PD tuner for the PuzzleBot waypoint controller.
 
-WHAT THIS SCRIPT DOES (conceptually)
-------------------------------------
-It runs ONE closed-loop step response so you can read off rise time,
-overshoot, settling time, and steady-state error -- the four numbers
-you need to tune a PD controller.
+Runs one closed-loop step response (heading or distance) and reports rise
+time, overshoot, settling time and steady-state error so you can tune a PD
+controller. The loop relies on pose updating from the encoders, so it also
+prints odometry diagnostics at startup and traces wL/wR/pose to CSV.
 
-  HEADING MODE:
-    1. Wait for encoders to start publishing.
-    2. Take a snapshot of the current heading: target_th = pose_th + step.
-    3. Every 50 ms:
-        - Integrate encoder readings to update pose_th.
-        - Compute err = target_th - pose_th.
-        - Send omega = Kp*err + Kd*derr/dt to the wheels.
-    4. Robot rotates -> encoders report rotation -> pose_th catches up
-       -> err shrinks -> omega shrinks -> robot settles.
-    5. When |err| stays inside a tolerance band for SETTLE_TIME seconds,
-       declare "settled" and report metrics.
+Debugging flags:
+  --open-loop   Bypass feedback, send a constant command for a few seconds
+                to verify the wheels move and check the encoder sign.
+  --flip-left   Negate /VelocityEncL inside the node.
+  --flip-right  Negate /VelocityEncR inside the node.
+  --swap        Swap left and right encoder readings.
 
-  DISTANCE MODE: same idea but with a forward-distance step, and the
-  heading PD also runs to keep the robot pointing at the goal.
+Usage:
+  python3 pid_tuner.py heading --open-loop   # check plumbing first
+  python3 pid_tuner.py heading 90            # 90 deg step
+  python3 pid_tuner.py distance 1.0          # 1.0 m step
 
-CRITICAL: the whole loop relies on pose updating from encoders. If the
-encoders don't publish, or publish with the wrong sign, pose stays
-frozen at 0, err stays at +step forever, and the robot spins endlessly
-while the tuner reports "NOT SETTLED, steady-state error = step".
-
-That's why this script also runs ODOMETRY DIAGNOSTICS at startup and
-keeps printing wL/wR/pose every 0.2 s so you can SEE whether feedback
-is working.
-
-DEBUGGING MODES
----------------
-  --open-loop       Bypass feedback entirely. Sends a constant
-                    omega (heading) or v (distance) for a few seconds.
-                    Use this to verify the wheels actually move and to
-                    observe which sign the encoders return.
-
-  --flip-left       Negate /VelEncL inside the node.
-  --flip-right      Negate /VelEncR inside the node.
-  --swap            Swap left and right encoder readings.
-
-USAGE
------
-  # 1) First check the plumbing:
-  python3 puzzlebot_pid_tuner.py heading --open-loop
-  #    Robot should turn LEFT for ~3 s. Watch the printed wL/wR values:
-  #      - If wL is NEGATIVE and wR is POSITIVE during left turn -> normal
-  #        (matches the formula w = R*(wR - wL)/B, which gives w > 0).
-  #      - If BOTH wL and wR are positive (absolute-value encoder) -> you
-  #        will need extra logic; this code can't fix that case alone.
-  #      - If they're swapped vs what you expect -> use --swap.
-  #      - If pose_th decreases during a left turn -> use --flip-left
-  #        AND --flip-right (sign convention inverted overall).
-
-  # 2) Once odometry tracks correctly, run the real tuner:
-  python3 puzzlebot_pid_tuner.py heading           # 90 deg step
-  python3 puzzlebot_pid_tuner.py heading 60        # 60 deg step
-  python3 puzzlebot_pid_tuner.py distance          # 1.0 m step
-  python3 puzzlebot_pid_tuner.py distance 0.5      # 0.5 m step
-
-TUNING ORDER
-------------
-Tune HEADING first, then DISTANCE.
-
-1) HEADING (KP_TH, KD_TH)
-   - Start KP_TH = 1.5, KD_TH = 0.
-   - Run `heading 90`. Increase KP_TH until you see 10-20% overshoot.
-   - Add KD_TH (~ KP_TH/10) to kill overshoot. Aim for <5% overshoot.
-   - Verify with small step (15 deg) AND large step (170 deg).
-   - Targets: rise time < 0.6 s, overshoot < 5 deg, ss error < 1 deg.
-
-2) DISTANCE (KP_DIST, KD_DIST), with tuned heading gains in place
-   - Start KP_DIST = 0.5, KD_DIST = 0.
-   - Run `distance 1.0`. Increase KP_DIST until rise time is good or
-     v_cmd starts saturating V_MAX (further KP is useless past that).
-   - Add KD_DIST (~ KP_DIST/6) to suppress arrival overshoot.
-   - Targets: stops within 3 cm, <5 cm overshoot, no creep.
-
-3) Full waypoint run with the tuned gains.
-   - Curves on straights: raise KP_TH.
-   - Side-to-side oscillation: raise KD_TH.
-   - Overshoots waypoints: raise KD_DIST or lower KP_DIST.
-
-Topics: /VelocitySetL, /VelocitySetR (publishers, default QoS)
-        /VelocityEncL, /VelocityEncR (subscribers, sensor-data QoS / BEST_EFFORT)
+Tune heading gains first, then distance.
 """
 
 import sys
@@ -102,33 +31,25 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32
 
 
-# ============================================================
-# Robot params  (must match puzzlebot_motion_pd.py exactly)
-# ============================================================
+# Robot params (must match pid_controller.py exactly)
 WHEEL_RADIUS = 0.048
 WHEEL_BASE   = 0.19
 
-# Chassis orientation (see puzzlebot_motion_pd.py for details)
+# Chassis orientation (see pid_controller.py for details)
 FORWARD_SIGN = -1
 
-# ============================================================
-# Gains UNDER TEST  -- edit between runs
-# ============================================================
+# Gains under test (edit between runs)
 KP_DIST = 0.9
 KD_DIST = 0.15
 KP_TH   = 2.2
 KD_TH   = 0.25
 
-# ============================================================
 # Saturation
-# ============================================================
 V_MAX        = 0.20
 OMEGA_MAX    = 1.2
 HEADING_GATE = math.radians(20.0)
 
-# ============================================================
 # Step / convergence config
-# ============================================================
 CTRL_DT       = 0.05
 SETTLE_TOL_TH = math.radians(2.0)
 SETTLE_TOL_D  = 0.03
@@ -142,7 +63,6 @@ OPENLOOP_V     = 0.10   # m/s   for --open-loop distance test
 OPENLOOP_DUR   = 3.0    # seconds
 
 
-# ============================================================
 def wrap_angle(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
@@ -155,7 +75,6 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 
-# ============================================================
 class PuzzlebotTuner(Node):
 
     def __init__(self, mode, step, open_loop, flip_left, flip_right, swap):
@@ -169,9 +88,7 @@ class PuzzlebotTuner(Node):
 
         self.pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self.pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
-        # Encoder topics publish at high rate with BEST_EFFORT reliability,
-        # so subscribers must use a sensor-data QoS profile or no messages
-        # will be received (the "incompatible QoS / RELIABILITY" warning).
+        # Encoders publish BEST_EFFORT, so subscribers need the sensor-data QoS
         self.create_subscription(
             Float32, "/VelocityEncL", self._cb_l, qos_profile_sensor_data)
         self.create_subscription(
@@ -243,7 +160,6 @@ class PuzzlebotTuner(Node):
             f"  Waiting {STARTUP_WAIT:.1f}s for encoders to publish..."
         )
 
-    # ----------------------------------
     @property
     def wL(self):
         v = self._raw_wR if self.swap else self._raw_wL
@@ -264,7 +180,6 @@ class PuzzlebotTuner(Node):
         self.got_R = True
         self.count_R += 1
 
-    # ----------------------------------
     def _update_odom(self, dt):
         v = FORWARD_SIGN * WHEEL_RADIUS * (self.wR + self.wL) / 2.0
         w = WHEEL_RADIUS * (self.wR - self.wL) / WHEEL_BASE
@@ -288,11 +203,10 @@ class PuzzlebotTuner(Node):
         z = Float32(); z.data = 0.0
         self.pub_l.publish(z); self.pub_r.publish(z)
 
-    # ----------------------------------
     def _tick(self):
         now = self.get_clock().now().nanoseconds / 1e9
 
-        # ---- one-time init / startup wait ----
+        # one-time init / startup wait
         if self.t0 is None:
             if self._start_real_time is None:
                 self._start_real_time = now
@@ -302,7 +216,7 @@ class PuzzlebotTuner(Node):
                 self.last_time = now
                 return
 
-            # --- Encoder diagnostic at end of startup ---
+            # Encoder diagnostic at end of startup
             self.get_logger().info("--- ENCODER STARTUP DIAGNOSTIC ---")
             self.get_logger().info(
                 f"  /VelocityEncL : received {self.count_L} msg  "
@@ -367,9 +281,7 @@ class PuzzlebotTuner(Node):
 
         v_meas, w_meas = self._update_odom(dt)
 
-        # ============================================================
-        # OPEN-LOOP MODE -- ignore feedback, just send a fixed command
-        # ============================================================
+        # OPEN-LOOP MODE: ignore feedback, just send a fixed command
         if self.open_loop:
             if t >= OPENLOOP_DUR:
                 self._stop()
@@ -399,9 +311,7 @@ class PuzzlebotTuner(Node):
                 )
             return
 
-        # ============================================================
         # CLOSED-LOOP MODE
-        # ============================================================
         if self.mode == "heading":
             err = wrap_angle(self.target_th - self.pose_th)
             d_err = (err - self.prev_err) / dt
@@ -446,9 +356,8 @@ class PuzzlebotTuner(Node):
             f"{math.degrees(self.pose_th):.3f}",
         ])
 
-        # --- RUNAWAY GUARD --------------------------------------------------
-        # If we've been commanding motion for > 2 s and odometry barely moved,
-        # something is wrong with feedback -- abort before circling forever.
+        # Runaway guard: if we've commanded motion for > 2 s and odometry
+        # barely moved, feedback is broken so abort before circling forever.
         if t > 2.0:
             if self.mode == "heading":
                 pose_moved = abs(wrap_angle(
@@ -472,7 +381,7 @@ class PuzzlebotTuner(Node):
                     )
                     return
 
-        # --- metrics ---
+        # metrics
         if abs(error_for_log) > self.peak_err:
             self.peak_err = abs(error_for_log)
         if step_magnitude > 0 and error_for_log < -self.peak_over:
@@ -508,7 +417,6 @@ class PuzzlebotTuner(Node):
                 f"{math.degrees(self.pose_th):+6.1f})"
             )
 
-    # ----------------------------------
     def _open_loop_summary(self, t):
         self.done = True
         self.csv_file.flush(); self.csv_file.close()
@@ -579,7 +487,6 @@ class PuzzlebotTuner(Node):
         self.get_logger().info("=" * 60)
         self.timer.cancel()
 
-    # ----------------------------------
     def _abort_runaway(self, t, msg):
         self.done = True
         self._stop()
@@ -601,7 +508,6 @@ class PuzzlebotTuner(Node):
         self.get_logger().error("=" * 60)
         self.timer.cancel()
 
-    # ----------------------------------
     def _finish(self, t_end, final_err, unit, step_magnitude, reason):
         self.done = True
         self._stop()
@@ -661,7 +567,6 @@ class PuzzlebotTuner(Node):
             self.get_logger().info(f"  - {s}")
 
 
-# ============================================================
 def main(args=None):
     raw = sys.argv[1:]
     cli = [a for a in raw if not a.startswith("--ros-args") and a != "--"]
@@ -699,7 +604,7 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().warn("Interrupted -- stopping motors.")
+        node.get_logger().warn("Interrupted, stopping motors.")
         node._stop()
     finally:
         node.destroy_node()
