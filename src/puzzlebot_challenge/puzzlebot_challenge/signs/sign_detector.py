@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""
-sign_detector.py — Detecta señales de tránsito con YOLO.
+"""Traffic sign detector (YOLO).
 
-Tópicos publicados:
-  /sign/command   (std_msgs/String)  — stop | go_straight | turn_left | turn_right | workers | none
-  /sign/detected  (std_msgs/Bool)    — True si hay señal activa
-  /vision/signs   (sensor_msgs/Image) — frame anotado
+Publishes:
+  /sign/command   (String)  stop | go_straight | turn_left | turn_right | workers | none
+  /sign/detected  (Bool)    True if a sign is active
+  /traffic_light  (String)  red | yellow | green | none
+  /vision/signs   (Image)   annotated frame
 """
 
 import ctypes
 import os
+import threading
 import time
 
-# Preload libgomp globally before torch is imported — required on Jetson aarch64
-# to avoid "cannot allocate memory in static TLS block" at runtime.
 for _lib in (
     '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0',
     '/usr/lib/aarch64-linux-gnu/libgomp.so.1',
@@ -28,7 +27,6 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
@@ -46,40 +44,57 @@ def _get_model(model_path: str):
         return _YOLO_MODEL
     _YOLO_TRIED = True
 
-    if not os.path.exists(model_path):
-        print(f"[sign_detector] WARN: model not found at {model_path} — YOLO disabled", flush=True)
+    base = model_path.replace('.pt', '').replace('.onnx', '').replace('.engine', '')
+    engine_path = base + '.engine'
+    onnx_path   = base + '.onnx'
+    if os.path.exists(engine_path):
+        load_path = engine_path
+    elif os.path.exists(onnx_path):
+        load_path = onnx_path
+    else:
+        print(f"[sign_detector] ERROR: no .engine or .onnx found at {base}, YOLO disabled", flush=True)
         return None
     try:
-        import sys, traceback, torch
+        import torch
         from ultralytics import YOLO
-        print(f"[sign_detector] torch={torch.__version__}  CUDA={torch.cuda.is_available()}", flush=True)
-        engine_path = model_path.replace('.pt', '.engine')
-        load_path = engine_path if os.path.exists(engine_path) else model_path
-        print(f"[sign_detector] loading: {load_path}")
-        _YOLO_MODEL = YOLO(load_path)
-
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        # ultralytics + TRT print to stdout/stderr during YOLO() construction
+        _dn = os.open(os.devnull, os.O_WRONLY)
+        _o1, _o2 = os.dup(1), os.dup(2)
+        os.dup2(_dn, 1); os.dup2(_dn, 2)
+        try:
+            _YOLO_MODEL = YOLO(load_path, task='detect')
+        finally:
+            os.dup2(_o1, 1); os.dup2(_o2, 2)
+            os.close(_o1); os.close(_o2); os.close(_dn)
         _INFER_HALF = torch.cuda.is_available()
-        print(f"[sign_detector] device={device}  half={_INFER_HALF}")
-
-        print(f"[sign_detector] model loaded: {model_path}")
+        print(f"[sign_detector] model loaded, CUDA={_INFER_HALF}  path={load_path}", flush=True)
     except Exception as e:
         import sys, traceback
-        print(f"[sign_detector] ERROR al cargar YOLO: {e}", flush=True)
+        print(f"[sign_detector] ERROR loading YOLO: {e}", flush=True)
         traceback.print_exc(file=sys.stdout)
     return _YOLO_MODEL
 
 
-def _warmup(model, imgsz: int = 192):
+def _warmup(model, imgsz: int = 320):
+    # TRT engine deserialization + cuDNN/cuBLAS init all print to stdout/stderr here
     dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    _dn = os.open(os.devnull, os.O_WRONLY)
+    _o1, _o2 = os.dup(1), os.dup(2)
+    os.dup2(_dn, 1); os.dup2(_dn, 2)
     try:
-        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz)
-        print("[sign_detector] model warmup done")
+        model.predict(dummy, verbose=False, conf=0.5, imgsz=imgsz,
+                      device="cuda:0" if _INFER_HALF else "cpu",
+                      half=_INFER_HALF)
     except Exception as e:
-        print(f"[sign_detector] warmup skipped: {e}")
+        os.dup2(_o1, 1); os.dup2(_o2, 2)
+        os.close(_o1); os.close(_o2); os.close(_dn)
+        print(f"[sign_detector] warmup skipped: {e}", flush=True)
+        return
+    os.dup2(_o1, 1); os.dup2(_o2, 2)
+    os.close(_o1); os.close(_o2); os.close(_dn)
+    print("[sign_detector] warmup done", flush=True)
 
-
-def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 256) -> list:
+def yolo_detect(frame: np.ndarray, model, conf_thr: float = 0.60, imgsz: int = 320) -> list:
     if model is None:
         return []
     results = model.predict(frame, verbose=False, conf=conf_thr, imgsz=imgsz,
@@ -104,11 +119,14 @@ def annotate(frame: np.ndarray, dets: list, command: str) -> np.ndarray:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return out
 
-_SENSOR_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=1,
-)
+DEBOUNCE_FRAMES = 2   # consecutive frames to confirm a detection
+
+# Traffic-light classes within the same YOLO model
+TRAFFIC_LIGHT_LABELS = {
+    "red_light":    "red",
+    "yellow_light": "yellow",
+    "green_light":  "green",
+}
 
 
 class SignDetectorNode(Node):
@@ -117,34 +135,73 @@ class SignDetectorNode(Node):
         super().__init__("sign_detector")
 
         self.declare_parameter("image_topic",    "/camera/image_raw")
-        self.declare_parameter("conf_threshold", 0.45)
+        self.declare_parameter("conf_threshold", 0.70)
+        self.declare_parameter("yellow_light_conf_threshold", 0.50)
         self.declare_parameter("model_path",     self._default_model_path())
-        self.declare_parameter("imgsz",          256)
+        self.declare_parameter("imgsz",          320)
+        self.declare_parameter("min_det_area",   2000)
+        self.declare_parameter("min_traffic_light_area", 2000)
+        self.declare_parameter("infer_rate_hz",  5.0)
 
-        image_topic = self.get_parameter("image_topic").value
-        self._conf  = float(self.get_parameter("conf_threshold").value)
-        self._imgsz = int(self.get_parameter("imgsz").value)
-        model_path  = self.get_parameter("model_path").value
+        image_topic         = self.get_parameter("image_topic").value
+        self._conf          = float(self.get_parameter("conf_threshold").value)
+        self._yellow_conf   = float(self.get_parameter("yellow_light_conf_threshold").value)
+        self._imgsz         = int(self.get_parameter("imgsz").value)
+        self._min_area      = int(self.get_parameter("min_det_area").value)
+        self._min_traffic_area = int(self.get_parameter("min_traffic_light_area").value)
+        self._infer_rate_hz = float(self.get_parameter("infer_rate_hz").value)
+        model_path          = self.get_parameter("model_path").value
 
-        self._bridge = CvBridge()
-        self._model  = _get_model(model_path)
+        self._bridge      = CvBridge()
+        self._model       = None
+        self._model_ready = False
 
-        self._latest_dets    = []
-        self._latest_command = "none"
-        self._last_status_t  = time.monotonic()
-        self._frames_in      = 0
+        # inference thread
+        self._infer_frame  = None
+        self._infer_lock   = threading.Lock()
+        self._infer_event  = threading.Event()
+        self._infer_thread = threading.Thread(
+            target=self._infer_loop, daemon=True)
+
+        # debounce — signs
+        self._pending_cmd    = "none"
+        self._pending_count  = 0
+        self._confirmed_cmd  = "none"
+
+        # debounce — traffic light
+        self._pending_traffic   = "none"
+        self._pending_traffic_count = 0
+        self._confirmed_traffic = "none"
 
         self.sub_img = self.create_subscription(
-            Image, image_topic, self._on_image, _SENSOR_QOS)
+            Image, image_topic, self._on_image, 10)
 
         self.pub_command  = self.create_publisher(String, "/sign/command",  10)
         self.pub_detected = self.create_publisher(Bool,   "/sign/detected", 10)
+        self.pub_traffic  = self.create_publisher(String, "/traffic_light", 10)
         self.pub_debug    = self.create_publisher(Image,  "/vision/signs",  10)
 
         self.get_logger().info(
-            f"SignDetector | topic={image_topic} | "
-            f"imgsz={self._imgsz} | conf>={self._conf:.0%} | "
-            f"YOLO={'ON' if self._model else 'OFF'}")
+            f"SignDetector | topic={image_topic} | imgsz={self._imgsz} | "
+            f"conf>={self._conf:.0%} | min_area={self._min_area}px | "
+            f"debounce={DEBOUNCE_FRAMES}f | loading model in background...")
+
+        threading.Thread(
+            target=self._load_model_bg, args=(model_path,), daemon=True
+        ).start()
+
+    def _load_model_bg(self, model_path: str):
+        model = _get_model(model_path)
+        if model:
+            _warmup(model, self._imgsz)
+        self._model = model
+        self._model_ready = True
+        self._infer_thread.start()
+        status = "ON" if self._model else "OFF (no model)"
+        self.get_logger().info(f"SignDetector READY | YOLO={status}")
+        self.get_logger().info(
+            ">>> To start the robot: "
+            "ros2 topic pub --once /robot/start std_msgs/Empty '{}'")
 
     def _default_model_path(self) -> str:
         try:
@@ -155,43 +212,114 @@ class SignDetectorNode(Node):
             return os.path.join(here, "..", "utils", "best.pt")
 
     def _on_image(self, msg: Image):
+        """ROS2 callback: convert and hand the frame to the inference thread."""
+        if not self._model_ready:
+            return
         try:
             frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as e:
-            self.get_logger().warn(f"Image conversion failed: {e}")
+        except Exception:
             return
+        with self._infer_lock:
+            self._infer_frame = frame   # always the latest
+        self._infer_event.set()
 
-        self._frames_in += 1
-
+    def _infer_loop(self):
+        """Dedicated thread: YOLO inference without blocking the ROS2 spin."""
         try:
-            final_dets = yolo_detect(frame, self._model,
-                                     conf_thr=self._conf,
-                                     imgsz=self._imgsz)
-        except Exception as e:
-            self.get_logger().error(f"[detector] YOLO falló: {e}")
-            return
+            os.nice(10)  # lower priority than line_detector to yield CPU
+        except OSError:
+            pass
 
-        if final_dets:
-            best    = max(final_dets, key=lambda d: d[3] * d[4])
-            command = best[0]
-            self.get_logger().info(
-                f"DETECTED: {command.upper()} "
-                f"(conf={best[5]:.0%}, {best[3]}x{best[4]}px)")
-        else:
-            command = "none"
+        min_dt    = 1.0 / max(self._infer_rate_hz, 0.5)
+        last_time = 0.0
+
+        while rclpy.ok():
+            self._infer_event.wait()
+            self._infer_event.clear()
+
             now = time.monotonic()
-            if now - self._last_status_t >= 5.0:
-                self.get_logger().info(f"[detector] nada detectado | frames_in={self._frames_in}")
-                self._last_status_t = now
+            if now - last_time < min_dt:
+                continue  # frame too recent, drop it
 
-        self._latest_dets    = final_dets
-        self._latest_command = command
+            with self._infer_lock:
+                frame = self._infer_frame
 
-        c_msg = String(); c_msg.data = command
-        d_msg = Bool();   d_msg.data = (command != "none")
-        self.pub_command.publish(c_msg)
-        self.pub_detected.publish(d_msg)
-        self._publish_debug(frame, final_dets, command)
+            if frame is None:
+                continue
+
+            last_time = time.monotonic()
+
+            try:
+                dets = yolo_detect(frame, self._model,
+                                   conf_thr=min(self._conf, self._yellow_conf),
+                                   imgsz=self._imgsz)
+            except Exception as e:
+                self.get_logger().error(f"YOLO failed: {e}")
+                continue
+
+            # per-class confidence threshold: yellow_light has its own
+            dets = [d for d in dets if d[5] >= (
+                self._yellow_conf if d[0] == "yellow_light" else self._conf)]
+
+            # Lights look much smaller than signs, so each uses its own min area
+            traffic_dets = [d for d in dets if d[0] in TRAFFIC_LIGHT_LABELS
+                            and d[3] * d[4] >= self._min_traffic_area]
+            sign_dets    = [d for d in dets if d[0] not in TRAFFIC_LIGHT_LABELS
+                            and d[3] * d[4] >= self._min_area]
+
+            # take the largest-area detection if there are several
+            raw_cmd = max(sign_dets, key=lambda d: d[3] * d[4])[0] if sign_dets else "none"
+
+            # debounce: confirm after DEBOUNCE_FRAMES consecutive frames
+            if raw_cmd == self._pending_cmd:
+                self._pending_count += 1
+            else:
+                self._pending_cmd   = raw_cmd
+                self._pending_count = 1
+
+            if self._pending_count >= DEBOUNCE_FRAMES:
+                command = self._pending_cmd
+            else:
+                command = self._confirmed_cmd  # keep last confirmed
+
+            if command != self._confirmed_cmd:
+                self._confirmed_cmd = command
+                best = max(sign_dets, key=lambda d: d[3] * d[4]) if sign_dets else None
+                if best:
+                    self.get_logger().info(
+                        f"DETECTED: {command.upper()} "
+                        f"(conf={best[5]:.0%}, area={best[3]*best[4]}px)")
+                else:
+                    self.get_logger().info("DETECTED: NONE")
+
+            # traffic-light debounce (same scheme, output red|yellow|green|none)
+            raw_traffic = "none"
+            if traffic_dets:
+                best_traffic = max(traffic_dets, key=lambda d: d[3] * d[4])
+                raw_traffic = TRAFFIC_LIGHT_LABELS[best_traffic[0]]
+
+            if raw_traffic == self._pending_traffic:
+                self._pending_traffic_count += 1
+            else:
+                self._pending_traffic       = raw_traffic
+                self._pending_traffic_count = 1
+
+            if self._pending_traffic_count >= DEBOUNCE_FRAMES:
+                traffic_state = self._pending_traffic
+            else:
+                traffic_state = self._confirmed_traffic
+
+            if traffic_state != self._confirmed_traffic:
+                self._confirmed_traffic = traffic_state
+                self.get_logger().info(f"TRAFFIC LIGHT: {traffic_state.upper()}")
+
+            c_msg = String(); c_msg.data = command
+            d_msg = Bool();   d_msg.data = (command != "none")
+            t_msg = String(); t_msg.data = traffic_state
+            self.pub_command.publish(c_msg)
+            self.pub_detected.publish(d_msg)
+            self.pub_traffic.publish(t_msg)
+            self._publish_debug(frame, dets, command)
 
     def _publish_debug(self, frame, dets, command):
         if self.pub_debug.get_subscription_count() == 0:
@@ -200,9 +328,6 @@ class SignDetectorNode(Node):
         out_msg = self._bridge.cv2_to_imgmsg(vis, encoding="bgr8")
         out_msg.header.stamp = self.get_clock().now().to_msg()
         self.pub_debug.publish(out_msg)
-
-    def destroy_node(self):
-        super().destroy_node()
 
 
 def main(args=None):

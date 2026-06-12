@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""
-teleop.py  —  PuzzleBot WASD teleop (modo pulso)
-Cada tecla envía un pulso de movimiento por PULSE_DURATION segundos y luego para.
+"""PuzzleBot WASD teleop (pulse mode).
+
+Each key sends a movement pulse for PULSE_DURATION seconds, then stops.
 """
 
 import os
@@ -19,19 +19,16 @@ FORWARD_SIGN  = -1
 
 LINEAR_SPEED  = 0.30   # [m/s]
 ANGULAR_SPEED = 2.0     # [rad/s]
-PULSE_DURATION = 0.25  # [s] cuánto dura cada pulso de tecla
+PULSE_DURATION = 0.25  # [s] duration of each key pulse
 
 BANNER = """
-╔══════════════════════════════════╗
-║   PuzzleBot WASD Teleop          ║
-╠══════════════════════════════════╣
-║  W  →  Adelante (pulso)          ║
-║  S  →  Atrás    (pulso)          ║
-║  A  →  Giro izquierda (pulso)    ║
-║  D  →  Giro derecha   (pulso)    ║
-║  Space / X  →  Parar             ║
-║  Q  →  Salir                     ║
-╚══════════════════════════════════╝
+PuzzleBot WASD Teleop
+  W          Forward (pulse)
+  S          Backward (pulse)
+  A          Turn left (pulse)
+  D          Turn right (pulse)
+  Space / X  Stop
+  Q          Quit
 """
 
 KEY_BINDINGS = {
@@ -44,10 +41,10 @@ KEY_BINDINGS = {
 }
 
 KEY_LABELS = {
-    'w': 'Adelante',
-    's': 'Atrás',
-    'a': 'Giro izq.',
-    'd': 'Giro der.',
+    'w': 'Forward',
+    's': 'Backward',
+    'a': 'Turn left',
+    'd': 'Turn right',
     ' ': 'STOP',
     'x': 'STOP',
 }
@@ -98,13 +95,12 @@ class TeleopNode(Node):
             pass
 
     def pulse(self, v: float, omega: float):
-        """Publica velocidad y programa un stop automático tras PULSE_DURATION."""
+        """Publish a velocity and schedule an automatic stop after PULSE_DURATION."""
         with self._lock:
-            # Cancela timer anterior si aún no disparó
             if self._stop_timer is not None:
                 self._stop_timer.cancel()
             self.publish(v, omega)
-            # Para movimientos de stop inmediato no ponemos timer
+            # Immediate stop needs no timer
             if v == 0.0 and omega == 0.0:
                 self._stop_timer = None
                 return
@@ -134,7 +130,7 @@ def main():
             key = get_key(settings).lower()
 
             if key == 'q':
-                print('\nSaliendo...')
+                print('\nQuitting...')
                 break
 
             if key in KEY_BINDINGS:
@@ -142,21 +138,20 @@ def main():
                 node.pulse(v, omega)
                 print(f'\r[{key.upper()}] {KEY_LABELS[key]:<16}', end='', flush=True)
             else:
-                print(f'\r[?] Tecla no reconocida: {repr(key)}    ', end='', flush=True)
+                print(f'\r[?] Unrecognized key: {repr(key)}    ', end='', flush=True)
 
     except KeyboardInterrupt:
-        print('\nInterrumpido.')
+        print('\nInterrupted.')
     finally:
         termios.tcsetattr(tty_fd, termios.TCSADRAIN, settings)
         with node._lock:
             if node._stop_timer is not None:
                 node._stop_timer.cancel()
                 node._stop_timer = None
-        # Publicar stop mientras spin sigue activo
+        # Publish stop while spin is still active
         for _ in range(10):
             node.stop()
             time.sleep(0.05)
-        # Bajar ROS limpiamente: shutdown hace que spin() retorne, luego join
         rclpy.shutdown()
         spin_thread.join(timeout=2.0)
 

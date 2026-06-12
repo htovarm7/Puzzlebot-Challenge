@@ -14,13 +14,13 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'),  glob('config/*.yaml')),
-        (os.path.join('share', package_name, 'models'), glob('utils/*.pt')),
+        (os.path.join('share', package_name, 'models'), glob('utils/*.engine') + glob('utils/*.onnx')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='JLDominguezM',
     maintainer_email='jldm1111@gmail.com',
-    description='Nodos ROS2 para el PuzzleBot (cámara CSI, PID, servidor MJPEG).',
+    description='ROS2 nodes for the PuzzleBot (CSI camera, line following, sign detection).',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
@@ -38,12 +38,10 @@ setup(
             'pid_tuner        = puzzlebot_challenge.control.pid_tuner:main',
             'motor_watchdog   = puzzlebot_challenge.control.motor_watchdog:main',
             'teleop           = puzzlebot_challenge.control.teleop:main',
-            # traffic
-            'traffic_detector = puzzlebot_challenge.traffic.traffic_controller_hsv:main',
-            'hsv_calibrator   = puzzlebot_challenge.traffic.hsv_calibrator:main',
             # signs
             'sign_detector              = puzzlebot_challenge.signs.sign_detector:main',
             'sign_behavior_controller   = puzzlebot_challenge.signs.sign_behavior_controller:main',
+            'sign_viewer                = puzzlebot_challenge.signs.sign_viewer:main',
         ],
     },
 )

@@ -1,6 +1,4 @@
-"""
-Interactive parameter tuner for the simpler Hough-based line detector.
-"""
+"""Interactive parameter tuner for the simpler Hough-based line detector."""
 
 import cv2 as cv
 import numpy as np
@@ -8,7 +6,7 @@ import sys
 import os
 
 
-# ─── Defaults ─────────────────────────────────────────────────────────
+# Defaults
 DEFAULTS = {
     # ROI
     "roi_top": 71,
@@ -23,10 +21,10 @@ DEFAULTS = {
     "max_gap": 170
 }
 
-C_OFFSET = 30   # trackbars are unsigned; show C as (slider - C_OFFSET)
+C_OFFSET = 30
 
 
-# ─── Windows ──────────────────────────────────────────────────────────
+# Windows
 WIN_PRE  = "Preprocessing"
 WIN_LINE = "Lines"
 WIN_DBG  = "Debug"
@@ -64,7 +62,7 @@ def reset_windows():
         (WIN_PRE,  "ROI top %",   "roi_top"),
         (WIN_PRE,  "blur (odd)",  "blur"),
         (WIN_PRE,  "block (odd)", "block_size"),
-        (WIN_PRE,  "C (+offset)", None),       # special — apply offset
+        (WIN_PRE,  "C (+offset)", None),       
         (WIN_PRE,  "morph",       "morph"),
         (WIN_LINE, "canny low",   "canny_low"),
         (WIN_LINE, "canny high",  "canny_high"),
@@ -80,10 +78,9 @@ def reset_windows():
 
 def read_params():
     blur = cv.getTrackbarPos("blur (odd)", WIN_PRE)
-    blur = max(1, blur | 1)                      # force odd
+    blur = max(1, blur | 1)                      
     block = cv.getTrackbarPos("block (odd)", WIN_PRE)
-    block = max(3, block | 1)                    # force odd, >= 3
-
+    block = max(3, block | 1)                  
     p = {
         "roi_top":    cv.getTrackbarPos("ROI top %", WIN_PRE) / 100.0,
         "blur":       blur,
@@ -96,6 +93,7 @@ def read_params():
         "min_len":    max(1, cv.getTrackbarPos("min length", WIN_LINE)),
         "max_gap":    cv.getTrackbarPos("max gap", WIN_LINE),
     }
+
     # Sanity: canny low < high
     if p["canny_low"] >= p["canny_high"]:
         p["canny_high"] = p["canny_low"] + 1
@@ -110,13 +108,12 @@ def save_params(p):
     print(f"[saved] {os.path.abspath(out)}")
 
 
-# ─── Detection (your original detect_lines, parameterized) ────────────
+# Detection
 def detect_lines(frame, p):
     height, width = frame.shape[:2]
     y_top = int(height * p["roi_top"])
 
-    # 1. ROI mask (same shape as original — trapezoid would also work,
-    #    but a rectangle matches the slider semantics simply).
+    # 1. ROI mask (rectangle matches the slider semantics)
     roi_vertices = np.array([[
         (0, height),
         (0, y_top),
@@ -137,7 +134,7 @@ def detect_lines(frame, p):
     else:
         blurred = gray_roi
 
-    # 4. Adaptive threshold (lines are dark → INV)
+    # 4. Adaptive threshold (lines are dark, so use INV)
     binary = cv.adaptiveThreshold(
         blurred, 255,
         cv.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -190,7 +187,7 @@ def draw_debug(frame, lines, y_top, p):
     return debug
 
 
-# ─── Source handling ──────────────────────────────────────────────────
+# Source handling
 def open_source(arg):
     if arg is None:
         cap = cv.VideoCapture(0)

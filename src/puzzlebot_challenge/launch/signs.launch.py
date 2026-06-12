@@ -1,40 +1,19 @@
-"""
-signs.launch.py
-===============
-Stack completo para detección de señales de tránsito con acciones.
+"""All-in-one sign stack (Jetson).
 
-Nodos (Jetson — este launch):
-  1. picam_publisher          – driver cámara CSI  (desactivar con with_camera:=false)
-  2. line_detector            – /line/shift, /line/angle, /line/detected
-  3. traffic_detector (HSV)   – /traffic_light  (red | yellow | green | none)
-  4. line_follower            – control PD de línea
-                                 ↳ salida remapeada → /line/VelocitySetL, /line/VelocitySetR
-  5. sign_behavior_controller – intercepta velocidades del line_follower
-                                 y aplica comportamientos por señal:
-                                   give_way    → para 2 s
-                                   stop        → para mientras esté visible + hold
-                                   workers     → reduce velocidad a X%
-                                   turn_left   → al dejar de ver la señal, gira izquierda
-                                   turn_right  → al dejar de ver la señal, gira derecha
-                                   go_straight → al dejar de ver la señal, avanza recto
-                                 ↳ publica → /VelocitySetL, /VelocitySetR
-  6. sign_api                 – HTTP server (puerto 8081) para recibir /sign/command
-  7. motor_watchdog           – para motores si no llegan comandos
+Like final.launch.py but also launches sign_detector (YOLO) and motor_watchdog
+in the same launch. The traffic light is detected by the YOLO model itself
+(/traffic_light), so no separate HSV detector is needed.
 
-Laptop (terminal separada):
-  ros2 launch puzzlebot_challenge signs_laptop.launch.py jetson_ip:=<IP_JETSON>
+Nodes: picam_publisher, line_detector, sign_detector, line_follower,
+sign_behavior_controller, motor_watchdog.
 
-Prioridad de control:
-  1° /traffic_light  red/yellow → STOP  (en line_follower)
-  2° sign_behavior_controller   → acción por señal
-  3° /line/*                    → seguimiento de línea PD
+Control priority: traffic_light (red/yellow) > sign behavior > line following.
 
-Uso:
+Usage:
   ros2 launch puzzlebot_challenge signs.launch.py
-  ros2 launch puzzlebot_challenge signs.launch.py v_base:=0.10 debug:=true
+  ros2 launch puzzlebot_challenge signs.launch.py v_base:=0.10
 """
 
-import glob
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -44,18 +23,17 @@ from launch_ros.actions import Node
 
 
 def _find_libgomp() -> str:
-    """
-    Devuelve la ruta al libgomp de PyTorch para precargarla con LD_PRELOAD.
-    Necesario en Jetson: ROS2 ocupa el TLS block antes de que torch lo pueda usar,
-    causando 'cannot allocate memory in static TLS block' al importar torch.
+    """Path to torch's libgomp for LD_PRELOAD.
+
+    Needed on Jetson: ROS2 takes the TLS block before torch can, causing
+    'cannot allocate memory in static TLS block' when importing torch.
     """
     import subprocess
-    # Respeta LD_PRELOAD ya seteado en el entorno
     existing = os.environ.get('LD_PRELOAD', '')
     if 'libgomp' in existing:
         return existing
 
-    # Busca primero en torch (evita mezclar versiones), luego cae al sistema
+    # Prefer torch's copy (avoid mixing versions), then fall back to the system
     for search_cmd in (
         'find /home /usr /opt -name "libgomp*.so*" -path "*/torch*" 2>/dev/null | head -1',
         'find /usr/lib -name "libgomp.so.1" 2>/dev/null | head -1',
@@ -73,30 +51,25 @@ def generate_launch_description():
     pkg_share  = get_package_share_directory('puzzlebot_challenge')
     camera_cfg = os.path.join(pkg_share, 'config', 'camera.yaml')
     line_cfg   = os.path.join(pkg_share, 'config', 'line_params.yaml')
-    hsv_cfg    = os.path.join(pkg_share, 'config', 'traffic_hsv.yaml')
 
-    # ── Argumentos ajustables ────────────────────────────────────────────────
     args = [
-        DeclareLaunchArgument('kp',               default_value='1.2',  description='PD P gain'),
-        DeclareLaunchArgument('kd',               default_value='0.35', description='PD D gain'),
-        DeclareLaunchArgument('ka',               default_value='0.4',  description='Peso corrección ángulo'),
-        DeclareLaunchArgument('v_base',           default_value='0.12', description='Velocidad base line_follower [m/s]'),
-        DeclareLaunchArgument('crossing_time',    default_value='3.0',  description='Segundos cruzando intersección recto'),
-        DeclareLaunchArgument('cooldown_time',    default_value='3.0',  description='Cooldown entre intersecciones [s]'),
-        DeclareLaunchArgument('give_way_time',    default_value='2.0',  description='Segundos de parada en give_way'),
-        DeclareLaunchArgument('stop_hold_time',   default_value='1.0',  description='Espera extra tras desaparecer el stop [s]'),
-        DeclareLaunchArgument('workers_factor',   default_value='0.5',  description='Factor de velocidad con señal workers'),
-        DeclareLaunchArgument('turn_time',        default_value='1.8',  description='Duración del giro [s]'),
-        DeclareLaunchArgument('turn_omega',       default_value='0.7',  description='Velocidad angular del giro [rad/s]'),
-        DeclareLaunchArgument('turn_v',           default_value='0.06', description='Velocidad lineal durante el giro [m/s]'),
-        DeclareLaunchArgument('straight_time',    default_value='3.0',  description='Duración del override recto [s]'),
-        DeclareLaunchArgument('straight_v',       default_value='0.12', description='Velocidad del override recto [m/s]'),
-        DeclareLaunchArgument('sign_cooldown',    default_value='4.0',  description='Cooldown entre señales iguales [s]'),
-        DeclareLaunchArgument('conf_threshold',   default_value='0.50', description='Umbral de confianza YOLO (0-1)'),
-        DeclareLaunchArgument('imgsz',            default_value='320',  description='Tamaño de imagen para inferencia YOLO'),
+        DeclareLaunchArgument('kp',             default_value='0.3',  description='P gain'),
+        DeclareLaunchArgument('kd',             default_value='0.08', description='D gain'),
+        DeclareLaunchArgument('ka',             default_value='0.2',  description='Angle correction weight'),
+        DeclareLaunchArgument('v_base',         default_value='0.12', description='Base speed [m/s]'),
+        DeclareLaunchArgument('give_way_time',  default_value='2.0',  description='give_way stop [s]'),
+        DeclareLaunchArgument('stop_hold_time', default_value='1.0',  description='Hold after stop sign disappears [s]'),
+        DeclareLaunchArgument('workers_factor', default_value='0.5',  description='Workers speed factor'),
+        DeclareLaunchArgument('turn_time',      default_value='1.8',  description='Turn duration [s]'),
+        DeclareLaunchArgument('turn_omega',     default_value='0.7',  description='Turn angular speed [rad/s]'),
+        DeclareLaunchArgument('turn_v',         default_value='0.06', description='Turn linear speed [m/s]'),
+        DeclareLaunchArgument('straight_time',  default_value='3.0',  description='go_straight override duration [s]'),
+        DeclareLaunchArgument('straight_v',     default_value='0.12', description='go_straight override speed [m/s]'),
+        DeclareLaunchArgument('sign_cooldown',  default_value='4.0',  description='Cooldown between equal signs [s]'),
+        DeclareLaunchArgument('conf_threshold', default_value='0.50', description='YOLO confidence threshold (0-1)'),
+        DeclareLaunchArgument('imgsz',          default_value='320',  description='YOLO inference image size'),
     ]
 
-    # ── 1. Cámara CSI ────────────────────────────────────────────────────────
     picam = Node(
         package='puzzlebot_challenge',
         executable='picam_publisher',
@@ -105,7 +78,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 2. Detector de línea ─────────────────────────────────────────────────
     line_detector = Node(
         package='puzzlebot_challenge',
         executable='line_detector',
@@ -114,29 +86,17 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Detector de semáforo (HSV) — PRIORIDAD 1 ──────────────────────────
-    traffic_detector = Node(
-        package='puzzlebot_challenge',
-        executable='traffic_detector',
-        name='traffic_light_detector',
-        parameters=[{'hsv_config': hsv_cfg}],
-        output='screen',
-    )
-
-    # ── 4. Seguidor de línea — salida remapeada a /line/Velocity* ────────────
-    #   El sign_behavior_controller lee de /line/VelocitySet{L,R} y publica
-    #   la velocidad final en /VelocitySet{L,R}, evitando conflicto de tópicos.
+    # line_follower output is remapped to /line/Velocity*; sign_behavior_controller
+    # reads those and publishes the final /VelocitySet{L,R}.
     line_follower = Node(
         package='puzzlebot_challenge',
         executable='line_follower',
         name='line_follower',
         parameters=[{
-            'kp':            LaunchConfiguration('kp'),
-            'kd':            LaunchConfiguration('kd'),
-            'ka':            LaunchConfiguration('ka'),
-            'v_base':        LaunchConfiguration('v_base'),
-            'crossing_time': LaunchConfiguration('crossing_time'),
-            'cooldown_time': LaunchConfiguration('cooldown_time'),
+            'kp':     LaunchConfiguration('kp'),
+            'kd':     LaunchConfiguration('kd'),
+            'ka':     LaunchConfiguration('ka'),
+            'v_base': LaunchConfiguration('v_base'),
         }],
         remappings=[
             ('/VelocitySetL', '/line/VelocitySetL'),
@@ -145,9 +105,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 5. Controlador de comportamiento por señales — PRIORIDAD 2 ────────────
-    #   Suscribe: /sign/command, /sign/detected, /line/VelocitySet{L,R}
-    #   Publica:  /VelocitySet{L,R}   (salida final a los motores)
     sign_behavior = Node(
         package='puzzlebot_challenge',
         executable='sign_behavior_controller',
@@ -166,9 +123,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 6. Detector de señales YOLO — corre en la Jetson ─────────────────────
-    #   Suscribe: /camera/image_raw
-    #   Publica:  /sign/command, /sign/detected, /vision/signs (debug)
     sign_detector = Node(
         package='puzzlebot_challenge',
         executable='sign_detector',
@@ -181,7 +135,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. Watchdog de seguridad ──────────────────────────────────────────────
     motor_watchdog = Node(
         package='puzzlebot_challenge',
         executable='motor_watchdog',
@@ -189,19 +142,18 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Precarga libgomp de torch para evitar el error de TLS en Jetson+ROS2
+    # Preload torch's libgomp to avoid the TLS error on Jetson + ROS2
     libgomp = _find_libgomp()
     env_actions = [SetEnvironmentVariable('PYTHONUNBUFFERED', '1')]
     if libgomp:
         env_actions.append(SetEnvironmentVariable('LD_PRELOAD', libgomp))
         env_actions.append(LogInfo(msg=f'[signs.launch] LD_PRELOAD={libgomp}'))
     else:
-        env_actions.append(LogInfo(msg='[signs.launch] WARN: libgomp no encontrado — torch puede fallar en ROS2'))
+        env_actions.append(LogInfo(msg='[signs.launch] WARN: libgomp not found, torch may fail under ROS2'))
 
     return LaunchDescription(env_actions + args + [
         picam,
         line_detector,
-        traffic_detector,
         sign_detector,
         line_follower,
         sign_behavior,

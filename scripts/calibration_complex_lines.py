@@ -1,6 +1,4 @@
-"""
-Interactive parameter tuner for contour-based line detection.
-"""
+"""Interactive parameter tuner for contour-based line detection."""
 
 import cv2 as cv
 import numpy as np
@@ -8,24 +6,24 @@ import sys
 import os
 
 
-# ─── Defaults ────────────────────────────────────────────────────────
+# Defaults
 DEFAULTS = {
-"T_init": 185,
-"T_min": 127,
-"T_max": 222,
-"dark_min_x10": 20,
-"dark_max_x10": 24  ,
-"roi_top_x100": 68,
-"min_area": 3753,
-"blur": 21,
-"morph": 9,
-"turn_angle": 36,
-"shift_max": 130
+    "T_init": 185,
+    "T_min": 127,
+    "T_max": 222,
+    "dark_min_x10": 20,
+    "dark_max_x10": 24  ,
+    "roi_top_x100": 68,
+    "min_area": 3753,
+    "blur": 21,
+    "morph": 9,
+    "turn_angle": 36,
+    "shift_max": 130
 
 }
 
 
-# ─── Tuner UI ────────────────────────────────────────────────────────
+# Tuner UI
 WIN_CTRL  = "Controls"
 WIN_DEBUG = "Debug"
 WIN_BIN   = "Binary (ROI)"
@@ -93,7 +91,7 @@ def save_params(p):
     print(f"[saved] {os.path.abspath(out)}")
 
 
-# ─── Detection (same logic as before, parameterized) ─────────────────
+# Detection
 _T_state = DEFAULTS["T_init"]  # threshold persists across frames
 
 
@@ -212,9 +210,9 @@ def detect(frame, p):
     return debug, binary_roi, angle, shift, T_used
 
 
-# ─── Main ────────────────────────────────────────────────────────────
+# Main
 def open_source(arg):
-    """Return (read_fn, is_image). read_fn() -> frame or None."""
+    """Return (read_fn, is_image, cap). read_fn() returns a frame or None."""
     if arg is None:
         cap = cv.VideoCapture(0)
         return (lambda: cap.read()[1]), False, cap
@@ -252,7 +250,7 @@ def main():
             if frame is None:
                 if is_image:
                     break
-                # video ended — loop it
+                # video ended, loop it
                 if cap is not None:
                     cap.set(cv.CAP_PROP_POS_FRAMES, 0)
                     continue

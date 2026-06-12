@@ -1,60 +1,48 @@
 #!/usr/bin/env python3
-"""
-sign_behavior_controller.py
-============================
-Intercepta las velocidades del line_follower y aplica comportamientos
-basados en las señales de tránsito detectadas por YOLO.
+"""Sign behavior controller.
 
-Arquitectura de tópicos:
-  line_follower  → /line/VelocitySetL, /line/VelocitySetR   (remapeado en launch)
-  sign_detector  → /sign/command, /sign/detected
-  este nodo      → /VelocitySetL, /VelocitySetR              (salida final)
-
-Comportamientos:
-  give_way    → detenerse 2 s en cuanto se ve la señal, luego continuar
-  stop        → detenerse mientras la señal esté visible + STOP_HOLD_TIME s después
-  workers     → reducir velocidad al WORKERS_FACTOR mientras la señal esté visible
-  turn_left   → al DEJAR de ver la señal, girar a la izquierda
-  turn_right  → al DEJAR de ver la señal, girar a la derecha
-  go_straight → al DEJAR de ver la señal, avanzar recto un tiempo fijo
+Intercepts line_follower wheel speeds and applies behaviors based on the
+traffic signs detected by YOLO. Turns are timer-triggered.
 """
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Bool, String
+from std_msgs.msg import Float32, Bool, String, Empty
 
-# ── Geometría del robot ───────────────────────────────────────────────────────
+# Robot geometry
 WHEEL_RADIUS = 0.05154
 WHEEL_BASE   = 0.19
-FORWARD_SIGN = -1   # velocidad de rueda positiva = avance
+FORWARD_SIGN = -1   # positive wheel speed = forward
 
-# ── Parámetros por defecto ────────────────────────────────────────────────────
-GIVE_WAY_STOP_TIME = 2.0   # s — duración de la parada en give_way
-STOP_HOLD_TIME     = 1.0   # s — espera extra tras desaparecer el stop
-WORKERS_FACTOR     = 0.5   # factor de velocidad con señal de workers visible
-APPROACH_TIME      = 0.4   # s — avance recto antes del giro
-TURN_TIME          = 1.8   # s — duración del giro
-TURN_OMEGA         = 0.7   # rad/s — velocidad angular del giro
-TURN_V             = 0.06  # m/s — velocidad lineal durante el giro
-STRAIGHT_TIME      = 3.0   # s — duración del override recto (go_straight)
-STRAIGHT_V         = 0.12  # m/s — velocidad durante el override recto
-SIGN_COOLDOWN      = 4.0   # s — cooldown antes de re-disparar el mismo comando
-CTRL_DT            = 0.05  # s — ciclo del bucle de control (20 Hz)
+# Default parameters
+GIVE_WAY_STOP_TIME = 2.0   # give_way stop duration [s]
+STOP_HOLD_TIME     = 1.0   # extra wait after stop sign disappears [s]
+WORKERS_FACTOR     = 0.5   # speed factor under workers sign
+APPROACH_TIME      = 0.4   # straight run before turn [s]
+TURN_TIME          = 4.0   # turn duration [s]
+TURN_OMEGA         = 0.7   # turn angular speed [rad/s]
+TURN_V             = 0.06  # linear speed during turn [m/s]
+STRAIGHT_TIME      = 3.0   # go_straight override duration [s]
+STRAIGHT_V         = 0.12  # go_straight override speed [m/s]
+SIGN_COOLDOWN      = 4.0   # cooldown before re-triggering the same command [s]
+ARM_DELAY          = 2.0   # wait after detection before running the maneuver [s]
+CTRL_DT            = 0.05  # control loop period [s]
 
-# ── Identificadores de estado ─────────────────────────────────────────────────
-S_IDLE             = "IDLE"
-S_GIVE_WAY         = "GIVE_WAY"
-S_STOP             = "STOP"
-S_STOP_HOLD        = "STOP_HOLD"
-S_WORKERS          = "WORKERS"
-S_PENDING_LEFT     = "PENDING_LEFT"
-S_PENDING_RIGHT    = "PENDING_RIGHT"
-S_PENDING_STRAIGHT = "PENDING_STRAIGHT"
-S_APPROACH_LEFT    = "APPROACH_LEFT"
-S_APPROACH_RIGHT   = "APPROACH_RIGHT"
-S_TURNING_LEFT     = "TURNING_LEFT"
-S_TURNING_RIGHT    = "TURNING_RIGHT"
-S_GOING_STRAIGHT   = "GOING_STRAIGHT"
+# State ids
+S_IDLE              = "IDLE"
+S_PENDING_GIVE_WAY  = "PENDING_GIVE_WAY"
+S_GIVE_WAY          = "GIVE_WAY"
+S_STOP              = "STOP"
+S_STOP_HOLD         = "STOP_HOLD"
+S_WORKERS           = "WORKERS"
+S_PENDING_LEFT      = "PENDING_LEFT"
+S_PENDING_RIGHT     = "PENDING_RIGHT"
+S_PENDING_STRAIGHT  = "PENDING_STRAIGHT"
+S_APPROACH_LEFT     = "APPROACH_LEFT"
+S_APPROACH_RIGHT    = "APPROACH_RIGHT"
+S_TURNING_LEFT      = "TURNING_LEFT"
+S_TURNING_RIGHT     = "TURNING_RIGHT"
+S_GOING_STRAIGHT    = "GOING_STRAIGHT"
 
 
 def unicycle_to_wheels(v: float, omega: float):
@@ -78,11 +66,16 @@ class SignBehaviorController(Node):
         self.declare_parameter("straight_time",      STRAIGHT_TIME)
         self.declare_parameter("straight_v",         STRAIGHT_V)
         self.declare_parameter("sign_cooldown",      SIGN_COOLDOWN)
+        self.declare_parameter("arm_delay",          ARM_DELAY)
+        self.declare_parameter("wait_for_start",     True)
 
-        self.create_subscription(String,  "/sign/command",      self._cb_command,  10)
-        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected, 10)
-        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,    10)
-        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,    10)
+        self.create_subscription(String,  "/sign/command",      self._cb_command,       10)
+        self.create_subscription(Bool,    "/sign/detected",     self._cb_detected,      10)
+        self.create_subscription(String,  "/traffic_light",     self._cb_traffic,       10)
+        self.create_subscription(Bool,    "/line/detected",     self._cb_line_detected, 10)
+        self.create_subscription(Float32, "/line/VelocitySetL", self._cb_vel_l,         10)
+        self.create_subscription(Float32, "/line/VelocitySetR", self._cb_vel_r,         10)
+        self.create_subscription(Empty,   "/robot/start",       self._cb_start,         10)
 
         self._pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self._pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
@@ -91,19 +84,29 @@ class SignBehaviorController(Node):
         self._state_start   = self._now()
         self._sign_command  = "none"
         self._sign_detected = False
+        self._traffic_state = "none"
         self._prev_detected = False
+        self._line_detected = False
         self._line_vel_l    = 0.0
         self._line_vel_r    = 0.0
-        self._last_trigger  = {}   # cmd → timestamp del último disparo
+        self._last_trigger  = {}     # cmd to last trigger timestamp
+
+        _wait = self.get_parameter("wait_for_start").value
+        _wait_bool = _wait if isinstance(_wait, bool) else str(_wait).lower() not in ("false", "0", "no")
+        self._sign_ready = not _wait_bool
 
         self.create_timer(CTRL_DT, self._control_loop)
-        self.get_logger().info(
-            "SignBehaviorController listo — escuchando /sign/command y /sign/detected")
+        self.get_logger().info("SignBehaviorController ready")
 
-    # ── Callbacks ─────────────────────────────────────────────────────────────
+    # Callbacks
 
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
+
+    def _cb_start(self, _msg: Empty):
+        if not self._sign_ready:
+            self._sign_ready = True
+            self.get_logger().info("[SignBehavior] /robot/start received — robot running")
 
     def _cb_command(self, msg: String):
         self._sign_command = msg.data.lower()
@@ -111,13 +114,19 @@ class SignBehaviorController(Node):
     def _cb_detected(self, msg: Bool):
         self._sign_detected = bool(msg.data)
 
+    def _cb_traffic(self, msg: String):
+        self._traffic_state = msg.data.lower()
+
+    def _cb_line_detected(self, msg: Bool):
+        self._line_detected = bool(msg.data)
+
     def _cb_vel_l(self, msg: Float32):
         self._line_vel_l = float(msg.data)
 
     def _cb_vel_r(self, msg: Float32):
         self._line_vel_r = float(msg.data)
 
-    # ── Helpers de publicación ────────────────────────────────────────────────
+    # Publish helpers
 
     def _publish(self, wl: float, wr: float):
         ml, mr = Float32(), Float32()
@@ -129,51 +138,85 @@ class SignBehaviorController(Node):
         self._publish(0.0, 0.0)
 
     def _passthrough(self):
-        """Reenvía las velocidades del line_follower sin modificar."""
+        """Forward line_follower speeds unchanged."""
         self._publish(self._line_vel_l, self._line_vel_r)
 
-    # ── Transición de estado ──────────────────────────────────────────────────
+    # State transition
+
+    _STATE_MSG = {
+        S_PENDING_GIVE_WAY: "GIVE WAY detected — approaching",
+        S_GIVE_WAY:         "GIVE WAY — stopping",
+        S_STOP:             "STOP — stopped",
+        S_STOP_HOLD:        "STOP — hold",
+        S_WORKERS:          "WORKERS — reduced speed",
+        S_PENDING_LEFT:     "TURN LEFT detected — waiting arm_delay s before turning",
+        S_PENDING_RIGHT:    "TURN RIGHT detected — waiting arm_delay s before turning",
+        S_PENDING_STRAIGHT: "GO STRAIGHT detected — waiting arm_delay s before straight",
+        S_APPROACH_LEFT:    "TURN LEFT — straight approach",
+        S_APPROACH_RIGHT:   "TURN RIGHT — straight approach",
+        S_TURNING_LEFT:     "TURN LEFT — turning",
+        S_TURNING_RIGHT:    "TURN RIGHT — turning",
+        S_GOING_STRAIGHT:   "GO STRAIGHT — driving straight",
+        S_IDLE:             "IDLE — following line",
+    }
 
     def _enter(self, state: str, cmd: str = None):
         self._state       = state
         self._state_start = self._now()
         if cmd is not None:
             self._last_trigger[cmd] = self._now()
-        self.get_logger().info(
-            f"[SignBehavior] → {state}" + (f"  (señal: {cmd})" if cmd else ""))
+        msg = self._STATE_MSG.get(state, state)
+        self.get_logger().info(f"[SignBehavior] {msg}")
 
     def _in_cooldown(self, cmd: str) -> bool:
         cooldown = self.get_parameter("sign_cooldown").value
         last = self._last_trigger.get(cmd, -(cooldown * 2))
         return (self._now() - last) < cooldown
 
-    # ── Bucle de control principal (20 Hz) ────────────────────────────────────
+    # Main control loop (20 Hz)
 
     def _control_loop(self):
+        if not self._sign_ready:
+            self._stop()
+            return
+
+        # Top priority: red light stops the robot
+        if self._traffic_state == "red":
+            self._stop()
+            return
+
+        # Yellow light reduces speed
+        if self._traffic_state == "yellow":
+            wk_fact = self.get_parameter("workers_factor").value
+            self._publish(self._line_vel_l * wk_fact,
+                          self._line_vel_r * wk_fact)
+            return
+
         elapsed  = self._now() - self._state_start
         cmd      = self._sign_command
         detected = self._sign_detected
 
-        rising  = detected and not self._prev_detected   # señal aparece
-        falling = not detected and self._prev_detected   # señal desaparece
+        rising  = detected and not self._prev_detected
+        falling = not detected and self._prev_detected
         self._prev_detected = detected
 
         p = self.get_parameter
-        gw_time  = p("give_way_stop_time").value
-        sh_time  = p("stop_hold_time").value
-        wk_fact  = p("workers_factor").value
-        app_time = p("approach_time").value
-        t_time   = p("turn_time").value
-        t_omg    = p("turn_omega").value
-        t_v      = p("turn_v").value
-        s_time   = p("straight_time").value
-        s_v      = p("straight_v").value
+        gw_time   = p("give_way_stop_time").value
+        sh_time   = p("stop_hold_time").value
+        wk_fact   = p("workers_factor").value
+        app_time  = p("approach_time").value
+        t_time    = p("turn_time").value
+        t_omg     = p("turn_omega").value
+        t_v       = p("turn_v").value
+        s_time    = p("straight_time").value
+        s_v       = p("straight_v").value
+        arm_delay = p("arm_delay").value
 
-        # ── IDLE: espera nuevo comando ─────────────────────────────────────
+        # IDLE: wait for new command
         if self._state == S_IDLE:
             if rising and not self._in_cooldown(cmd):
                 if cmd == "give_way":
-                    self._enter(S_GIVE_WAY, cmd)
+                    self._enter(S_PENDING_GIVE_WAY, cmd)
                 elif cmd == "stop":
                     self._enter(S_STOP, cmd)
                 elif cmd == "workers":
@@ -186,49 +229,60 @@ class SignBehaviorController(Node):
                     self._enter(S_PENDING_STRAIGHT, cmd)
             self._passthrough()
 
-        # ── GIVE_WAY: para 2 s, luego continúa ────────────────────────────
+        # PENDING_GIVE_WAY: follow line while sign visible
+        elif self._state == S_PENDING_GIVE_WAY:
+            if falling:
+                self._enter(S_GIVE_WAY)
+            else:
+                self._passthrough()
+
+        # GIVE_WAY: stop 2 s after losing sign, then continue
         elif self._state == S_GIVE_WAY:
             if elapsed < gw_time:
                 self._stop()
             else:
                 self._enter(S_IDLE)
 
-        # ── STOP: para mientras la señal esté visible ──────────────────────
+        # STOP: stop while sign visible
         elif self._state == S_STOP:
             if not detected:
                 self._enter(S_STOP_HOLD)
             else:
                 self._stop()
 
-        # ── STOP_HOLD: breve pausa extra tras desaparecer el stop ──────────
+        # STOP_HOLD: short extra pause after stop disappears
         elif self._state == S_STOP_HOLD:
             if elapsed < sh_time:
                 self._stop()
             else:
                 self._enter(S_IDLE)
 
-        # ── WORKERS: reduce velocidad mientras la señal esté visible ───────
+        # WORKERS: reduce speed while sign visible
         elif self._state == S_WORKERS:
-            if not detected:
-                self._enter(S_IDLE)
-                self._passthrough()
-            else:
+            if detected:
                 self._publish(self._line_vel_l * wk_fact,
                               self._line_vel_r * wk_fact)
+            else:
+                self._enter(S_IDLE)
+                self._passthrough()
 
-        # ── PENDING_*: espera a que la señal desaparezca ───────────────────
+        # PENDING_*: follow the line until arm_delay, then run the maneuver
         elif self._state in (S_PENDING_LEFT, S_PENDING_RIGHT, S_PENDING_STRAIGHT):
-            if falling:
+            if elapsed >= arm_delay:
                 if self._state == S_PENDING_LEFT:
                     self._enter(S_APPROACH_LEFT)
                 elif self._state == S_PENDING_RIGHT:
                     self._enter(S_APPROACH_RIGHT)
                 else:
                     self._enter(S_GOING_STRAIGHT)
-            else:
+            elif self._line_detected:
                 self._passthrough()
+            else:
+                # line lost during count: drive straight, do not stop
+                vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, 0.0)
+                self._publish(vl, vr)
 
-        # ── APPROACH_LEFT / APPROACH_RIGHT: tramo recto previo al giro ─────
+        # APPROACH_LEFT / APPROACH_RIGHT: straight run before the turn
         elif self._state == S_APPROACH_LEFT:
             if elapsed < app_time:
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, 0.0)
@@ -243,25 +297,25 @@ class SignBehaviorController(Node):
             else:
                 self._enter(S_TURNING_RIGHT)
 
-        # ── TURNING_LEFT ───────────────────────────────────────────────────
+        # TURNING_LEFT
         elif self._state == S_TURNING_LEFT:
             if elapsed < t_time:
-                omega = FORWARD_SIGN * t_omg          # omega positivo = giro izquierda
+                omega = FORWARD_SIGN * t_omg          # positive omega turns left
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, omega)
                 self._publish(vl, vr)
             else:
                 self._enter(S_IDLE)
 
-        # ── TURNING_RIGHT ──────────────────────────────────────────────────
+        # TURNING_RIGHT
         elif self._state == S_TURNING_RIGHT:
             if elapsed < t_time:
-                omega = -(FORWARD_SIGN * t_omg)       # omega negativo = giro derecha
+                omega = -(FORWARD_SIGN * t_omg)       # negative omega turns right
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * t_v, omega)
                 self._publish(vl, vr)
             else:
                 self._enter(S_IDLE)
 
-        # ── GOING_STRAIGHT: avanza recto ignorando el line_follower ────────
+        # GOING_STRAIGHT: drive straight ignoring line_follower
         elif self._state == S_GOING_STRAIGHT:
             if elapsed < s_time:
                 vl, vr = unicycle_to_wheels(FORWARD_SIGN * s_v, 0.0)

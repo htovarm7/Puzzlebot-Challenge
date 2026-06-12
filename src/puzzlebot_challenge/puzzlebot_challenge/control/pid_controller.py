@@ -1,47 +1,17 @@
 #!/usr/bin/env python3
-"""
-puzzlebot_motion_pd.py
-======================
-ROS2 Humble node for Manchester Robotics PuzzleBot.
-CLOSED-LOOP PD waypoint follower using wheel-encoder odometry.
+"""Closed-loop PD waypoint follower using wheel-encoder odometry.
 
-Topics
-------
-Publishers : /VelocitySetL  (std_msgs/Float32)  rad/s, default QoS
-             /VelocitySetR  (std_msgs/Float32)  rad/s, default QoS
-Subscribers: /VelocityEncL  (std_msgs/Float32)  rad/s measured, sensor-data QoS
-             /VelocityEncR  (std_msgs/Float32)  rad/s measured, sensor-data QoS
+Two cascaded PD loops driven by encoder-based odometry: a TURN phase that
+rotates in place toward the waypoint, then a STRAIGHT phase that drives to it
+while correcting heading. A segment completes when the error stays within
+tolerance for SETTLE_TICKS consecutive ticks.
 
-The encoder topics use BEST_EFFORT reliability (sensor-data profile).
-A default RELIABLE subscriber will silently fail to receive any messages
-and ROS 2 will warn "incompatible QoS / RELIABILITY".
+Topics:
+  Pub: /VelocitySetL, /VelocitySetR  (Float32, rad/s)
+  Sub: /VelocityEncL, /VelocityEncR  (Float32, rad/s measured, sensor-data QoS)
 
-Control architecture
---------------------
-Two cascaded PD loops driven by encoder-based odometry:
-
-  1) TURN phase (in-place rotation):
-        error_th = wrap(target_th - pose_th)
-        omega    = Kp_th * error_th + Kd_th * d(error_th)/dt
-        v        = 0
-
-  2) STRAIGHT phase (drive to waypoint while correcting heading):
-        error_d  = projected remaining distance along heading
-        error_th = wrap(angle_to_goal - pose_th)
-        v        = Kp_d  * error_d  + Kd_d  * d(error_d)/dt
-        omega    = Kp_th * error_th + Kd_th * d(error_th)/dt
-
-Segment completes when |error| < tolerance for N consecutive ticks
-AND commanded speeds are below a small threshold (settled).
-
-Odometry
---------
-Standard differential-drive integration from measured wheel speeds:
-    v_meas   = R * (wR + wL) / 2
-    w_meas   = R * (wR - wL) / B
-    x += v*cos(th)*dt ; y += v*sin(th)*dt ; th += w*dt
-
-Author : Armando / MCR2 Mini Challenge 1  (closed-loop revision)
+The encoder topics use BEST_EFFORT reliability, so the subscribers use the
+sensor-data profile to match.
 """
 
 import sys
@@ -53,58 +23,34 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32, String
 
 
-# ============================================================
-# Robot physical parameters  (MUST match your real PuzzleBot)
-# ============================================================
-WHEEL_RADIUS = 0.05154     # [m]  calibrated via linear test (cinta vs odom)
+# Robot physical parameters (must match your real PuzzleBot)
+WHEEL_RADIUS = 0.05154     # [m]  calibrated via linear test (tape vs odom)
 WHEEL_BASE   = 0.19        # [m]  track width (left-right wheel distance)
 
-# Chassis orientation: set to -1 if the robot is mounted such that what
-# the controller calls "forward" is physically backward (front and back
-# reversed). +1 = normal, -1 = flipped. Only forward/back is affected;
-# left/right turns are unchanged because they're symmetric.
+# Chassis orientation: -1 if the robot's physical front is the controller's
+# back. +1 = normal, -1 = flipped. Only forward/back is affected.
 FORWARD_SIGN = -1
 
-# ============================================================
-# PD GAINS  -- tune with puzzlebot_pid_tuner.py
-# ============================================================
-# Distance loop (linear velocity)
-KP_DIST = 0.9
+# PD gains (tune with pid_tuner.py)
+KP_DIST = 0.9              # distance loop (linear velocity)
 KD_DIST = 0.15
-
-# Heading loop (angular velocity) -- used both in TURN and STRAIGHT
-KP_TH   = 2.2
+KP_TH   = 2.2             # heading loop (angular velocity)
 KD_TH   = 0.25
 
-# ============================================================
-# Saturation limits (safety + matches PuzzleBot capability)
-# ============================================================
+# Saturation limits
 V_MAX     = 0.20           # [m/s]
 OMEGA_MAX = 1.2            # [rad/s]
-# During STRAIGHT phase we limit v further when heading error is large
-# so the robot rotates first instead of driving off-course.
 HEADING_GATE = math.radians(20.0)   # if |err_th| > this, slow v down
 
-# ============================================================
-# Convergence criteria (closed-loop segment completion)
-# ============================================================
+# Convergence criteria
 DIST_TOL      = 0.03               # [m]   stop straight segment within 3 cm
-ANG_TOL       = math.radians(2.0)  # [rad] stop turn within 2°
-SETTLE_TICKS  = 5                  # need this many consecutive in-tolerance ticks
+ANG_TOL       = math.radians(2.0)  # [rad] stop turn within 2 deg
+SETTLE_TICKS  = 5                  # consecutive in-tolerance ticks needed
 
-# ============================================================
-# Loop timing
-# =============== =============================================
 CTRL_DT = 0.05             # [s]  20 Hz control loop
 
-# ============================================================
-# Traffic-light reaction
-# Gains applied to v and omega when the matching state is active.
-#   green / none → full speed
-#   yellow       → slow down
-#   red          → full stop (also pauses the watchdog so a long red
-#                  light doesn't time out the segment).
-# ============================================================
+# Traffic-light reaction: gain applied to v and omega per state.
+# Red is a full stop, yellow slows down, green/none run at full speed.
 TRAFFIC_GAIN = {
     "green":  1.0,
     "none":   1.0,
@@ -112,9 +58,7 @@ TRAFFIC_GAIN = {
     "red":    0.0,
 }
 
-# ============================================================
 # Task selection + waypoints
-# ============================================================
 TASK = "WAYPOINTS"
 
 WAYPOINTS = [
@@ -129,16 +73,13 @@ WAYPOINTS = [
 SQUARE_SIDE = 0.55
 
 
-# ============================================================
-# Utility functions
-# ============================================================
 def wrap_angle(a: float) -> float:
     """Wrap angle to [-pi, pi]."""
     return (a + math.pi) % (2.0 * math.pi) - math.pi
 
 
 def unicycle_to_wheels(v: float, omega: float):
-    """(v, w) [m/s, rad/s]  ->  (wL, wR) [rad/s] for PuzzleBot wheel API."""
+    """Convert (v, omega) to (wL, wR) wheel speeds for the PuzzleBot API."""
     v_l = (v - omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
     v_r = (v + omega * WHEEL_BASE / 2.0) / WHEEL_RADIUS
     return v_l, v_r
@@ -148,9 +89,7 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 
-# ============================================================
 # FSM states
-# ============================================================
 class State:
     IDLE            = "IDLE"
     TURN_TO_HEADING = "TURN_TO_HEADING"
@@ -158,55 +97,44 @@ class State:
     GOAL_REACHED    = "GOAL_REACHED"
 
 
-# ============================================================
-# Main node
-# ============================================================
 class PuzzlebotMotionPD(Node):
 
     def __init__(self):
         super().__init__("puzzlebot_motion_pd")
 
-        # ---- Publishers / subscribers ----
         self.pub_l = self.create_publisher(Float32, "/VelocitySetL", 10)
         self.pub_r = self.create_publisher(Float32, "/VelocitySetR", 10)
-        # Encoders publish with BEST_EFFORT reliability; subscribers must
-        # match or no messages will be received.
+        # Encoders publish BEST_EFFORT, so subscribers must match
         self.create_subscription(
             Float32, "/VelocityEncL", self._enc_l_cb, qos_profile_sensor_data)
         self.create_subscription(
             Float32, "/VelocityEncR", self._enc_r_cb, qos_profile_sensor_data)
 
-        # ---- Traffic light reaction ----
         self._traffic_state = "none"
         self.create_subscription(
             String, "/traffic_light", self._on_traffic, 10)
 
-        # ---- Wheel speed measurements (rad/s) ----
+        # Wheel speed measurements (rad/s)
         self.wL = 0.0
         self.wR = 0.0
 
-        # ---- Odometry pose ----
+        # Odometry pose
         self.pose_x  = 0.0
         self.pose_y  = 0.0
         self.pose_th = 0.0
 
-        # ---- Build target list ----
-        # Each target = (target_x, target_y, target_th_after_arrival_or_None)
-        # We pre-compute the heading the robot should achieve before driving.
         self.targets = []
         self._build_targets()
         self.tgt_index = 0
 
-        # ---- PD state ----
+        # PD state
         self.prev_err_dist = 0.0
         self.prev_err_th   = 0.0
         self.in_tol_count  = 0
 
-        # ---- FSM ----
         self.state = State.IDLE
         self._startup_deadline = self.get_clock().now().nanoseconds / 1e9 + 2.0
 
-        # ---- Control timer ----
         self.last_time = self.get_clock().now().nanoseconds / 1e9
         self.timer = self.create_timer(CTRL_DT, self._control_loop)
 
@@ -215,9 +143,6 @@ class PuzzlebotMotionPD(Node):
             f"Kp_d={KP_DIST} Kd_d={KD_DIST}  Kp_th={KP_TH} Kd_th={KD_TH}"
         )
 
-    # --------------------------------------------------------
-    # Target builder
-    # --------------------------------------------------------
     def _build_targets(self):
         if TASK == "WAYPOINTS":
             for (x, y) in WAYPOINTS:
@@ -232,31 +157,24 @@ class PuzzlebotMotionPD(Node):
         for i, (x, y) in enumerate(self.targets):
             self.get_logger().info(f"  target[{i+1}] = ({x:+.3f}, {y:+.3f})")
 
-    # --------------------------------------------------------
     # Encoder callbacks (measured wheel angular velocities)
-    # --------------------------------------------------------
     def _enc_l_cb(self, msg: Float32):
         self.wL = float(msg.data)
 
     def _enc_r_cb(self, msg: Float32):
         self.wR = float(msg.data)
 
-    # --------------------------------------------------------
-    # Traffic light callback
-    # --------------------------------------------------------
     def _on_traffic(self, msg: String):
         new_state = (msg.data or "none").strip().lower()
         if new_state not in TRAFFIC_GAIN:
             new_state = "none"
         if new_state != self._traffic_state:
             self.get_logger().info(
-                f"[traffic] {self._traffic_state.upper()} → {new_state.upper()}"
+                f"[traffic] {self._traffic_state.upper()} to {new_state.upper()}"
             )
             self._traffic_state = new_state
 
-    # --------------------------------------------------------
     # Odometry update (called each control tick)
-    # --------------------------------------------------------
     def _update_odom(self, dt: float):
         v_meas = FORWARD_SIGN * WHEEL_RADIUS * (self.wR + self.wL) / 2.0
         w_meas = WHEEL_RADIUS * (self.wR - self.wL) / WHEEL_BASE
@@ -267,9 +185,7 @@ class PuzzlebotMotionPD(Node):
         self.pose_y  += v_meas * math.sin(th_mid) * dt
         self.pose_th  = wrap_angle(self.pose_th + w_meas * dt)
 
-    # --------------------------------------------------------
     # Motor publish helpers
-    # --------------------------------------------------------
     def _publish_wheels(self, wL_cmd: float, wR_cmd: float):
         ml, mr = Float32(), Float32()
         ml.data, mr.data = float(wL_cmd), float(wR_cmd)
@@ -291,9 +207,6 @@ class PuzzlebotMotionPD(Node):
     def _stop(self):
         self._publish_wheels(0.0, 0.0)
 
-    # --------------------------------------------------------
-    # Main control loop
-    # --------------------------------------------------------
     def _control_loop(self):
         now = self.get_clock().now().nanoseconds / 1e9
         dt = max(1e-3, now - self.last_time)
@@ -301,7 +214,7 @@ class PuzzlebotMotionPD(Node):
 
         self._update_odom(dt)
 
-        # -- IDLE: startup pause, then begin first target --
+        # IDLE: startup pause, then begin first target
         if self.state == State.IDLE:
             self._stop()
             if now >= self._startup_deadline:
@@ -311,7 +224,7 @@ class PuzzlebotMotionPD(Node):
                     self.state = State.GOAL_REACHED
             return
 
-        # -- GOAL_REACHED: latch motors off --
+        # GOAL_REACHED: latch motors off
         if self.state == State.GOAL_REACHED:
             self._stop()
             self.get_logger().info(
@@ -321,7 +234,7 @@ class PuzzlebotMotionPD(Node):
             self.timer.cancel()
             return
 
-        # -- Current target --
+        # Current target
         tx, ty = self.targets[self.tgt_index]
         dx = tx - self.pose_x
         dy = ty - self.pose_y
@@ -329,9 +242,7 @@ class PuzzlebotMotionPD(Node):
         angle_to_goal = math.atan2(dy, dx)
         err_th = wrap_angle(angle_to_goal - self.pose_th)
 
-        # --------------------------------------------------------
-        # STATE: TURN_TO_HEADING   (rotate in place toward waypoint)
-        # --------------------------------------------------------
+        # TURN_TO_HEADING: rotate in place toward waypoint
         if self.state == State.TURN_TO_HEADING:
             d_err_th = (err_th - self.prev_err_th) / dt
             self.prev_err_th = err_th
@@ -347,8 +258,8 @@ class PuzzlebotMotionPD(Node):
             if self.in_tol_count >= SETTLE_TICKS:
                 self._stop()
                 self.get_logger().info(
-                    f"  [turn done] err={math.degrees(err_th):+.2f} deg  "
-                    f"-> switch to DRIVE"
+                    f"  [turn done] err={math.degrees(err_th):+.2f} deg, "
+                    f"switch to DRIVE"
                 )
                 self.state = State.DRIVE_TO_POINT
                 self.in_tol_count = 0
@@ -356,9 +267,7 @@ class PuzzlebotMotionPD(Node):
                 self.prev_err_th = err_th
             return
 
-        # --------------------------------------------------------
-        # STATE: DRIVE_TO_POINT  (forward + heading correction)
-        # --------------------------------------------------------
+        # DRIVE_TO_POINT: forward + heading correction
         if self.state == State.DRIVE_TO_POINT:
             # Distance error: signed projection along current heading.
             # This is positive while goal is in front, becomes ~0 at goal,
@@ -404,9 +313,7 @@ class PuzzlebotMotionPD(Node):
                     self.state = State.GOAL_REACHED
             return
 
-    # --------------------------------------------------------
     # Target transition: precompute heading and switch to TURN
-    # --------------------------------------------------------
     def _begin_target(self):
         tx, ty = self.targets[self.tgt_index]
         dx = tx - self.pose_x
@@ -436,9 +343,6 @@ class PuzzlebotMotionPD(Node):
             )
 
 
-# ============================================================
-# Entry point
-# ============================================================
 def main(args=None):
     global TASK
     valid = {"square": "SQUARE", "waypoints": "WAYPOINTS"}
@@ -456,7 +360,7 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().warn("Keyboard interrupt -- stopping motors.")
+        node.get_logger().warn("Keyboard interrupt, stopping motors.")
         node._stop()
     finally:
         node.destroy_node()
